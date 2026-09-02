@@ -1,5 +1,6 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 
 const router = express.Router();
@@ -69,6 +70,97 @@ router.post('/register', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Registration failed'
+    });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // 1. Validate input
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
+    // 2. Find user by email
+    const users = await prisma.$queryRaw`
+      SELECT
+        user_id,
+        username,
+        email,
+        password_hash,
+        global_role,
+        is_banned
+      FROM users
+      WHERE email = ${email}
+      LIMIT 1;
+    `;
+
+    // 3. Check whether user exists
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    }
+
+    const user = users[0];
+
+    // 4. Check whether user is banned
+    if (user.is_banned) {
+      return res.status(403).json({
+        success: false,
+        message: 'This account has been banned'
+      });
+    }
+
+    // 5. Compare password with stored bcrypt hash
+    const passwordMatches = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    if (!passwordMatches) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password'
+      });
+    }
+
+    // 6. Create JWT
+    const token = jwt.sign(
+      {
+        user_id: user.user_id
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: '1h'
+      }
+    );
+
+    // 7. Send response
+    res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      token,
+      user: {
+        user_id: user.user_id,
+        username: user.username,
+        email: user.email,
+        global_role: user.global_role
+      }
+    });
+
+  } catch (error) {
+    console.error('Login error:', error);
+
+    res.status(500).json({
+      success: false,
+      message: 'Login failed'
     });
   }
 });

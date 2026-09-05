@@ -220,7 +220,8 @@ router.post('/login', authLimiter, async (req, res) => {
         password_hash,
         global_role,
         is_banned,
-        token_version
+        token_version,
+        has_onboarded
       FROM users
       WHERE email = ${email}
       LIMIT 1;
@@ -278,7 +279,8 @@ router.post('/login', authLimiter, async (req, res) => {
         user_id: user.user_id,
         username: user.username,
         email: user.email,
-        global_role: user.global_role
+        global_role: user.global_role,
+        has_onboarded: user.has_onboarded
       }
     });
 
@@ -453,6 +455,85 @@ router.post('/reset-password', authLimiter, async (req, res) => {
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ success: false, message: 'Failed to reset password' });
+  }
+});
+
+
+
+// 1. GET ONBOARDING DATA (Categories and top wikis for interest pills)
+router.get('/onboarding-data', authenticateToken, async (req, res) => {
+  try {
+    const categories = await prisma.$queryRaw`
+      SELECT category_id, name, description
+      FROM categories
+      ORDER BY name ASC;
+    `;
+
+    const wikis = await prisma.$queryRaw`
+      SELECT 
+        wiki_id, 
+        title, 
+        slug, 
+        description, 
+        total_views::INT AS total_views
+      FROM wiki_spaces
+      ORDER BY total_views DESC
+      LIMIT 12;
+    `;
+
+    res.status(200).json({
+      success: true,
+      categories,
+      wikis
+    });
+  } catch (error) {
+    console.error('Failed to fetch onboarding data:', error);
+    res.status(500).json({ success: false, message: 'Could not load interest options' });
+  }
+});
+
+// 2. POST ONBOARDING: Batch insert follows and mark user as onboarded
+router.post('/onboarding', authenticateToken, async (req, res) => {
+  try {
+    const { category_ids = [], wiki_ids = [] } = req.body;
+    const userId = req.user.user_id;
+
+    const queries = [];
+
+    // Batch insert category follows
+    for (const catId of category_ids) {
+      queries.push(prisma.$executeRaw`
+        INSERT INTO user_category_follows (user_id, category_id)
+        VALUES (${userId}, ${Number(catId)})
+        ON CONFLICT (user_id, category_id) DO NOTHING;
+      `);
+    }
+
+    // Batch insert wiki follows
+    for (const wId of wiki_ids) {
+      queries.push(prisma.$executeRaw`
+        INSERT INTO user_wiki_follows (user_id, wiki_id)
+        VALUES (${userId}, ${Number(wId)})
+        ON CONFLICT (user_id, wiki_id) DO NOTHING;
+      `);
+    }
+
+    // Mark user onboarding as complete
+    queries.push(prisma.$executeRaw`
+      UPDATE users
+      SET has_onboarded = TRUE
+      WHERE user_id = ${userId};
+    `);
+
+    await prisma.$transaction(queries);
+
+    res.status(200).json({
+      success: true,
+      message: 'Interests saved successfully'
+    });
+  } catch (error) {
+    console.error('Onboarding error:', error);
+    res.status(500).json({ success: false, message: 'Failed to record selected interests' });
   }
 });
 

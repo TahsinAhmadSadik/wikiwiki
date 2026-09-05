@@ -1,0 +1,133 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 1000;
+}
+
+.modal-content {
+  width: 100%;
+  max-width: 540px;
+  background-color: #0d0d0f;
+  border: 1px solid #1f1f23;
+  border-radius: 8px;
+  padding: 2rem;
+  box-sizing: border-box;
+  color: #f4f4f5;
+}
+
+.modal-header {
+  margin-bottom: 1.5rem;
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem 0;
+}
+
+.modal-header p {
+  font-size: 0.85rem;
+  color: #a1a1aa;
+  margin: 0;
+}
+
+.step-indicator {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #71717a;
+  margin-bottom: 0.5rem;
+}
+
+.pill-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 0.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.pill-grid::-webkit-scrollbar {
+  width: 4px;
+}
+.pill-grid::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 2px;
+}
+
+.interest-pill {
+  background-color: #141417;
+  border: 1px solid #27272a;
+  color: #a1a1aa;
+  border-radius: 9999px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.interest-pill:hover {
+  border-color: #52525b;
+  color: #f4f4f5;
+}
+
+.interest-pill.selected {
+  background-color: #f4f4f5;
+  border-color: #f4f4f5;
+  color: #09090b;
+  font-weight: 500;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid #1f1f23;
+  padding-top: 1.25rem;
+}
+
+.skip-btn {
+  background: none;
+  border: none;
+  color: #71717a;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.skip-btn:hover {
+  color: #f4f4f5;
+}
+
+.action-group {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.onboarding-btn {
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.onboarding-btn.primary {
+  background-color: #f4f4f5;
+  color: #09090b;
+  border: none;
+}
+
+.onboarding-btn.secondary {
+  background-color: #18181b;
+  color: #f4f4f5;
+  border: 1px solid #27272a;
+}

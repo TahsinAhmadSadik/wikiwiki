@@ -293,3 +293,9 @@ CREATE TABLE pending_registrations (
 );
 
 CREATE INDEX idx_pending_registrations_token ON pending_registrations(token_hash);
+
+
+
+
+
+ALTER TABLE users ADD COLUMN has_onboarded BOOLEAN DEFAULT FALSE NOT NULL;

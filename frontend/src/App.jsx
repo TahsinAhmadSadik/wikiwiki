@@ -3,16 +3,30 @@ import { Routes, Route } from 'react-router-dom';
 import AuthPage from './pages/AuthPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import VerifyEmailPage from './pages/VerifyEmailPage';
+import OnboardingModal from './components/OnboardingModal';
 import { ProtectedRoute, GuestRoute } from './components/RouteGuards';
 import { useAuth } from './context/AuthContext';
 
 function Dashboard() {
-  const { user, logout } = useAuth();
+  const { user, logout, updateUser } = useAuth();
+
   return (
-    <div style={{ padding: '2rem', color: '#fff', backgroundColor: '#09090b', minHeight: '100vh' }}>
+    <div style={{ padding: '2rem', color: '#fff', backgroundColor: '#000', minHeight: '100vh' }}>
+      {/* Show multi-step modal if the user hasn't completed onboarding */}
+      {!user?.has_onboarded && (
+        <OnboardingModal
+          onComplete={() => {
+            updateUser({ has_onboarded: true });
+          }}
+        />
+      )}
+
       <h2>Dashboard</h2>
       <p>Logged in as: {user?.username} ({user?.global_role})</p>
-      <button onClick={logout} style={{ padding: '0.5rem 1rem', cursor: 'pointer' }}>
+      <button 
+        onClick={logout} 
+        style={{ padding: '0.5rem 1rem', background: '#18181b', color: '#fff', border: '1px solid #27272a', cursor: 'pointer', borderRadius: 4 }}
+      >
         Log out
       </button>
     </div>
@@ -22,12 +36,10 @@ function Dashboard() {
 export default function App() {
   return (
     <Routes>
-      {/* Protected Routes */}
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<Dashboard />} />
       </Route>
 
-      {/* Guest Only Routes */}
       <Route element={<GuestRoute />}>
         <Route path="/login" element={<AuthPage initialView="login" />} />
         <Route path="/register" element={<AuthPage initialView="register" />} />

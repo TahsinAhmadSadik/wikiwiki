@@ -1,20 +1,25 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
+import helmet from 'helmet';
+import { prisma } from './lib/prisma.js';
 import authRoutes from './routes/auth.routes.js';
 
 dotenv.config();
 const app = express();
-const prisma = new PrismaClient();
 
-app.use(cors());
+app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
 app.use(express.json());
+app.use(helmet()); // autometic security headers
 app.use('/api/auth', authRoutes);
 
 // app.get('/api/health', (req, res) => {
 //   res.json({ status: 'ok', message: 'WikiWiki API is running' });
 // });
+
+
+// for connectivity check
+
 app.get('/api/test-db', async (req, res) => {
   try {
     const result = await prisma.$queryRaw`

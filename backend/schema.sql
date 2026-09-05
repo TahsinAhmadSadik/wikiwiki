@@ -251,7 +251,7 @@ ADD COLUMN contribution_message TEXT;
 
 
 
-
+ALTER TABLE users ADD COLUMN token_version INT DEFAULT 1 NOT NULL;
 
 
 

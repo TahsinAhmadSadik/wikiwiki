@@ -1,12 +1,20 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
+import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
+import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
-router.post('/register', async (req, res) => {
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per IP
+  message: { success: false, message: 'Too many attempts, please try again later.' }
+});
+
+router.post('/register', authLimiter, async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
@@ -15,6 +23,13 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Username, email and password are required'
+      });
+    }
+
+    if (password.length < 8 || password.length > 72) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be between 8 and 72 characters'
       });
     }
 
@@ -74,7 +89,8 @@ router.post('/register', async (req, res) => {
   }
 });
 
-router.post('/login', async (req, res) => {
+
+router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -94,7 +110,8 @@ router.post('/login', async (req, res) => {
         email,
         password_hash,
         global_role,
-        is_banned
+        is_banned,
+        token_version
       FROM users
       WHERE email = ${email}
       LIMIT 1;
@@ -134,7 +151,8 @@ router.post('/login', async (req, res) => {
     // 6. Create JWT
     const token = jwt.sign(
       {
-        user_id: user.user_id
+        user_id: user.user_id,
+        token_version: user.token_version
       },
       process.env.JWT_SECRET,
       {
@@ -161,6 +179,27 @@ router.post('/login', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Login failed'
+    });
+  }
+});
+
+router.post('/logout', authenticateToken, async (req, res) => {
+  try {
+    await prisma.$executeRaw`
+      UPDATE users
+      SET token_version = token_version + 1
+      WHERE user_id = ${req.user.user_id};
+    `;
+
+    res.status(200).json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Logout failed'
     });
   }
 });

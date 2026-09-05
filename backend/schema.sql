@@ -263,7 +263,16 @@ ALTER TABLE users ADD COLUMN token_version INT DEFAULT 1 NOT NULL;
 
 
 
+CREATE TABLE password_resets (
+    reset_id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    used_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 
+CREATE INDEX idx_password_resets_token_hash ON password_resets(token_hash);
 
 
 

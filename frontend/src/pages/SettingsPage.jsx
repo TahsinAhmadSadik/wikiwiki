@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import '../styles/settings.css';
@@ -7,6 +7,8 @@ import '../styles/auth.css';
 
 export default function SettingsPage() {
   const { user, login, logout, updateUser } = useAuth();
+  const navigate = useNavigate();
+
   const [activeTab, setActiveTab] = useState('profile');
 
   const [bio, setBio] = useState('');
@@ -16,6 +18,12 @@ export default function SettingsPage() {
 
   const [followedCategories, setFollowedCategories] = useState([]);
   const [followedWikis, setFollowedWikis] = useState([]);
+
+  // Account Deletion States
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleteConfirmationEmail, setDeleteConfirmationEmail] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -105,6 +113,30 @@ export default function SettingsPage() {
     }
   };
 
+  const handleDeleteAccount = async (e) => {
+    e.preventDefault();
+    setDeleteError('');
+
+    if (deleteConfirmationEmail.trim().toLowerCase() !== user?.email.toLowerCase()) {
+      setDeleteError('Entered email does not match your account email.');
+      return;
+    }
+
+    setDeleting(true);
+
+    try {
+      await api.delete('/users/account', {
+        body: { confirm_email: deleteConfirmationEmail.trim() },
+      });
+      // Purge state and route back to register
+      await logout();
+      navigate('/register');
+    } catch (err) {
+      setDeleteError(err.data?.message || err.message);
+      setDeleting(false);
+    }
+  };
+
   if (loading) {
     return <div className="settings-container" style={{ color: '#71717a' }}>Loading settings...</div>;
   }
@@ -190,53 +222,72 @@ export default function SettingsPage() {
 
       {/* SECURITY TAB */}
       {activeTab === 'security' && (
-        <div className="settings-card">
-          <h2>Change Password</h2>
-          <p className="section-desc">Ensure your account is using a secure, unique password</p>
+        <>
+          <div className="settings-card">
+            <h2>Change Password</h2>
+            <p className="section-desc">Ensure your account is using a secure, unique password</p>
 
-          <form onSubmit={handleChangePassword}>
-            <div className="settings-group">
-              <label>Current Password</label>
-              <input
-                type="password"
-                required
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                className="settings-input"
-              />
-            </div>
+            <form onSubmit={handleChangePassword}>
+              <div className="settings-group">
+                <label>Current Password</label>
+                <input
+                  type="password"
+                  required
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="settings-input"
+                />
+              </div>
 
-            <div className="settings-group">
-              <label>New Password</label>
-              <input
-                type="password"
-                required
-                placeholder="Minimum 8 characters"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="settings-input"
-              />
-            </div>
+              <div className="settings-group">
+                <label>New Password</label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Minimum 8 characters"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="settings-input"
+                />
+              </div>
 
-            <div className="settings-group">
-              <label>Confirm New Password</label>
-              <input
-                type="password"
-                required
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="settings-input"
-              />
-            </div>
+              <div className="settings-group">
+                <label>Confirm New Password</label>
+                <input
+                  type="password"
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="settings-input"
+                />
+              </div>
 
-            <button type="submit" disabled={saving} className="auth-btn" style={{ width: 'auto' }}>
-              {saving ? 'Updating...' : 'Update Password'}
+              <button type="submit" disabled={saving} className="auth-btn" style={{ width: 'auto' }}>
+                {saving ? 'Updating...' : 'Update Password'}
+              </button>
+            </form>
+          </div>
+
+          {/* DANGER ZONE */}
+          <div className="settings-card danger">
+            <h2>Danger Zone</h2>
+            <p className="section-desc">Permanently remove your account and all associated preferences</p>
+            <button
+              type="button"
+              className="danger-btn"
+              onClick={() => {
+                setDeleteError('');
+                setDeleteConfirmationEmail('');
+                setIsDeleteModalOpen(true);
+              }}
+            >
+              Delete Account
             </button>
-          </form>
-        </div>
+          </div>
+        </>
       )}
 
-      {/* PREFERENCES / INTERESTS TAB */}
+      {/* PREFERENCES TAB */}
       {activeTab === 'interests' && (
         <div className="settings-card">
           <h2>Followed Interests</h2>
@@ -280,6 +331,64 @@ export default function SettingsPage() {
                 ))
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRM DELETION MODAL */}
+      {isDeleteModalOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card">
+            <header className="delete-modal-header">
+              <h3>Delete Account</h3>
+              <p>
+                This action is permanent and irreversible. Your personal profile, follows, and session keys will be completely erased.
+              </p>
+            </header>
+
+            {deleteError && (
+              <div className="auth-alert error" style={{ marginBottom: '1rem' }}>
+                {deleteError}
+              </div>
+            )}
+
+            <form onSubmit={handleDeleteAccount}>
+              <div className="settings-group">
+                <label style={{ fontSize: '0.8125rem', color: '#a1a1aa' }}>
+                  Please type <strong>{user?.email}</strong> to confirm:
+                </label>
+                <input
+                  type="email"
+                  required
+                  className="settings-input"
+                  placeholder="name@example.com"
+                  value={deleteConfirmationEmail}
+                  onChange={(e) => setDeleteConfirmationEmail(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div className="delete-modal-actions">
+                <button
+                  type="button"
+                  className="topbar-btn"
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  disabled={deleting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="danger-btn"
+                  disabled={
+                    deleting ||
+                    deleteConfirmationEmail.trim().toLowerCase() !== user?.email.toLowerCase()
+                  }
+                >
+                  {deleting ? 'Deleting...' : 'Delete Permanently'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

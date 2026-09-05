@@ -5,6 +5,8 @@ import ResetPasswordPage from './pages/ResetPasswordPage';
 import VerifyEmailPage from './pages/VerifyEmailPage';
 import SettingsPage from './pages/SettingsPage';
 import OnboardingModal from './components/OnboardingModal';
+import NotFoundPage from './pages/NotFoundPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import { ProtectedRoute, GuestRoute } from './components/RouteGuards';
 import { useAuth } from './context/AuthContext';
 
@@ -86,6 +88,9 @@ export default function App() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/verify-email" element={<VerifyEmailPage />} />
       </Route>
+
+      {/* Global Fallback 404 Route */}
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

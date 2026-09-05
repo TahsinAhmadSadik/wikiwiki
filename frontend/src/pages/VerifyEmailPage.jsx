@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { api } from '../services/api';
 import '../styles/auth.css';
@@ -11,6 +11,9 @@ export default function VerifyEmailPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  // Prevents React StrictMode from executing the single-use verification twice
+  const hasRequested = useRef(false);
+
   useEffect(() => {
     if (!token) {
       setErrorMessage('Missing verification token.');
@@ -18,11 +21,16 @@ export default function VerifyEmailPage() {
       return;
     }
 
+    if (hasRequested.current) return;
+    hasRequested.current = true;
+
     const verifyToken = async () => {
       try {
         const data = await api.post('/auth/verify-email', { token });
+        setErrorMessage('');
         setSuccessMessage(data.message);
       } catch (err) {
+        setSuccessMessage('');
         setErrorMessage(err.data?.message || err.message);
       } finally {
         setLoading(false);
@@ -58,11 +66,17 @@ export default function VerifyEmailPage() {
           </div>
         )}
 
-        <footer className="auth-footer">
-          <Link to="/login" className="auth-btn" style={{ display: 'block', textDecoration: 'none', textAlign: 'center' }}>
-            Proceed to Login
-          </Link>
-        </footer>
+        {!loading && (
+          <footer className="auth-footer">
+            <Link 
+              to="/login" 
+              className="auth-btn" 
+              style={{ display: 'block', textDecoration: 'none', textAlign: 'center' }}
+            >
+              Proceed to Login
+            </Link>
+          </footer>
+        )}
       </div>
     </div>
   );

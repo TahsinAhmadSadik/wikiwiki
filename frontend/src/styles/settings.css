@@ -177,3 +177,80 @@
 .topbar-btn:hover {
   background: #27272a;
 }
+
+/* Danger Zone */
+.settings-card.danger {
+  border-color: rgba(239, 68, 68, 0.25);
+  background-color: #0d0a0b;
+}
+
+.settings-card.danger h2 {
+  color: #f87171;
+}
+
+.danger-btn {
+  background-color: transparent;
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.danger-btn:hover:not(:disabled) {
+  background-color: #ef4444;
+  color: #ffffff;
+  border-color: #ef4444;
+}
+
+.danger-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Deletion Confirmation Modal */
+.delete-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 1000;
+}
+
+.delete-modal-card {
+  width: 100%;
+  max-width: 440px;
+  background-color: #0d0d0f;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 2rem;
+  color: #f4f4f5;
+}
+
+.delete-modal-header h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  color: #f87171;
+}
+
+.delete-modal-header p {
+  font-size: 0.85rem;
+  color: #a1a1aa;
+  margin: 0 0 1.25rem 0;
+  line-height: 1.45;
+}
+
+.delete-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}

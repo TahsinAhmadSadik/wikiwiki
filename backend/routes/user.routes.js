@@ -168,4 +168,55 @@ router.delete('/follows/wiki/:wikiId', authenticateToken, async (req, res) => {
   }
 });
 
+// 5. DELETE ACCOUNT
+router.delete('/account', authenticateToken, async (req, res) => {
+  try {
+    const { confirm_email } = req.body;
+    const userId = req.user.user_id;
+
+    if (!confirm_email) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email confirmation is required' 
+      });
+    }
+
+    const users = await prisma.$queryRaw`
+      SELECT user_id, email
+      FROM users
+      WHERE user_id = ${userId}
+      LIMIT 1;
+    `;
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const user = users[0];
+
+    if (user.email.toLowerCase() !== confirm_email.trim().toLowerCase()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Provided email does not match your account email' 
+      });
+    }
+
+    // Clean up follows and resets before deleting the user record
+    await prisma.$transaction([
+      prisma.$executeRaw`DELETE FROM user_category_follows WHERE user_id = ${userId};`,
+      prisma.$executeRaw`DELETE FROM user_wiki_follows WHERE user_id = ${userId};`,
+      prisma.$executeRaw`DELETE FROM password_resets WHERE user_id = ${userId};`,
+      prisma.$executeRaw`DELETE FROM users WHERE user_id = ${userId};`
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: 'Account successfully deleted'
+    });
+  } catch (error) {
+    console.error('Account deletion error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete account' });
+  }
+});
+
 export default router;

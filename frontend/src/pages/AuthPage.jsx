@@ -84,9 +84,12 @@ export default function AuthPage({ initialView = 'login' }) {
     setLoading(true);
 
     try {
-      await api.post('/auth/register', { username, email, password });
-      setSuccessMessage('Account created successfully. You can now log in.');
-      switchView('login');
+      const data = await api.post('/auth/register', { username, email, password });
+      // Show instruction to check inbox instead of directing immediately to login
+      setSuccessMessage(data.message || 'Verification link sent! Please check your email to activate your account.');
+      setUsername('');
+      setEmail('');
+      setPassword('');
     } catch (err) {
       setErrorMessage(err.data?.message || err.message);
     } finally {

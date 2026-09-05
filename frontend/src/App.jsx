@@ -2,6 +2,7 @@ import React from 'react';
 import { Routes, Route } from 'react-router-dom';
 import AuthPage from './pages/AuthPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 import { ProtectedRoute, GuestRoute } from './components/RouteGuards';
 import { useAuth } from './context/AuthContext';
 
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/login" element={<AuthPage initialView="login" />} />
         <Route path="/register" element={<AuthPage initialView="register" />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
       </Route>
     </Routes>
   );

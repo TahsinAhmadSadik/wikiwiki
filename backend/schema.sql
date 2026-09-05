@@ -280,3 +280,16 @@ CREATE INDEX idx_password_resets_token_hash ON password_resets(token_hash);
 
 
 
+
+
+CREATE TABLE pending_registrations (
+    pending_id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL,
+    email VARCHAR(100) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    token_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_pending_registrations_token ON pending_registrations(token_hash);

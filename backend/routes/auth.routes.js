@@ -3,12 +3,11 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { Resend } from 'resend';
 import { prisma } from '../lib/prisma.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { Resend } from 'resend';
 
 const router = express.Router();
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 
 const authLimiter = rateLimit({
@@ -17,11 +16,11 @@ const authLimiter = rateLimit({
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
 
+// 1. REGISTER: Validates input, stages pending signup, sends email via Resend
 router.post('/register', authLimiter, async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
-    // 1. Validate input
     if (!username || !email || !password) {
       return res.status(400).json({
         success: false,
@@ -36,7 +35,7 @@ router.post('/register', authLimiter, async (req, res) => {
       });
     }
 
-    // 2. Check whether username or email already exists
+    // Check if username or email is already an active user in the DB
     const existingUser = await prisma.$queryRaw`
       SELECT user_id
       FROM users
@@ -52,42 +51,149 @@ router.post('/register', authLimiter, async (req, res) => {
       });
     }
 
-    // 3. Hash password
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // 4. Insert user
-    const newUser = await prisma.$queryRaw`
-      INSERT INTO users (
+    // Generate random 32-byte hex token and hash it
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    // Clean up any previous unverified registration attempts for this email or username
+    await prisma.$executeRaw`
+      DELETE FROM pending_registrations
+      WHERE email = ${email} OR username = ${username};
+    `;
+
+    // Stage pending registration
+    await prisma.$executeRaw`
+      INSERT INTO pending_registrations (
         username,
         email,
-        password_hash
+        password_hash,
+        token_hash,
+        expires_at
       )
       VALUES (
         ${username},
         ${email},
-        ${passwordHash}
-      )
-      RETURNING
-        user_id,
-        username,
-        email,
-        global_role,
-        created_at;
+        ${passwordHash},
+        ${tokenHash},
+        ${expiresAt}
+      );
     `;
 
-    // 5. Send response
-    res.status(201).json({
+    const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${rawToken}`;
+
+    // Always log to terminal for local dev and teammate testing
+    console.log('----------------------------------------------------');
+    console.log(`[VERIFICATION LINK for ${email}]:`);
+    console.log(verificationUrl);
+    console.log('----------------------------------------------------');
+
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    await resend.emails.send({
+      from: 'Wiki Support <onboarding@resend.dev>',
+      to: email,
+      subject: 'Verify your email to complete registration',
+      html: `
+        <h2>Welcome to the Wiki!</h2>
+        <p>Please confirm your email address to complete creating your account.</p>
+        <p><a href="${verificationUrl}">Click here to verify and activate your account</a></p>
+        <p>This link expires in 24 hours.</p>
+      `
+    });
+
+    res.status(200).json({
       success: true,
-      message: 'User registered successfully',
-      user: newUser[0]
+      message: 'Verification email dispatched. Please verify your email to complete registration.'
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
-
+    console.error('Registration dispatch error:', error);
     res.status(500).json({
       success: false,
-      message: 'Registration failed'
+      message: 'Failed to dispatch verification email'
+    });
+  }
+});
+
+// 2. VERIFY EMAIL: Verifies token, inserts into `users`, and deletes pending record
+router.post('/verify-email', authLimiter, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Verification token is required' });
+    }
+
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    const records = await prisma.$queryRaw`
+      SELECT pending_id, username, email, password_hash, expires_at
+      FROM pending_registrations
+      WHERE token_hash = ${tokenHash}
+      LIMIT 1;
+    `;
+
+    if (records.length === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification link' });
+    }
+
+    const pending = records[0];
+
+    if (new Date(pending.expires_at) < new Date()) {
+      await prisma.$executeRaw`
+        DELETE FROM pending_registrations WHERE pending_id = ${pending.pending_id};
+      `;
+      return res.status(400).json({ success: false, message: 'Verification link has expired. Please sign up again.' });
+    }
+
+    // Check again if taken while verification was pending
+    const conflict = await prisma.$queryRaw`
+      SELECT user_id FROM users
+      WHERE username = ${pending.username} OR email = ${pending.email}
+      LIMIT 1;
+    `;
+
+    if (conflict.length > 0) {
+      await prisma.$executeRaw`
+        DELETE FROM pending_registrations WHERE pending_id = ${pending.pending_id};
+      `;
+      return res.status(409).json({ success: false, message: 'Username or email is already registered.' });
+    }
+
+    // Insert user into real `users` table and delete from `pending_registrations`
+    await prisma.$transaction([
+      prisma.$executeRaw`
+        INSERT INTO users (
+          username,
+          email,
+          password_hash,
+          global_role
+        )
+        VALUES (
+          ${pending.username},
+          ${pending.email},
+          ${pending.password_hash},
+          'contributor'
+        );
+      `,
+      prisma.$executeRaw`
+        DELETE FROM pending_registrations WHERE pending_id = ${pending.pending_id};
+      `
+    ]);
+
+    res.status(201).json({
+      success: true,
+      message: 'Email verified successfully! Your account is active. You can now log in.'
+    });
+
+  } catch (error) {
+    console.error('Email verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Email verification failed'
     });
   }
 });
@@ -254,6 +360,13 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
 
     // Generate reset URL (Front-end URL)
     const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${rawToken}`;
+
+    // temporary logging in console
+    console.log('----------------------------------------------------');
+    console.log(`[PASSWORD RESET LINK for ${user.email}]:`);
+    console.log(resetUrl);
+    console.log('----------------------------------------------------');
+
 
     const resend = new Resend(process.env.RESEND_API_KEY);
 

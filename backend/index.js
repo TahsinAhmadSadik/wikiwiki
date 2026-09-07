@@ -6,6 +6,10 @@ import helmet from 'helmet';
 import { prisma } from './lib/prisma.js';
 import authRoutes from './routes/auth.routes.js';
 import userRoutes from './routes/user.routes.js';
+import wikiRoutes from './routes/wiki.routes.js';
+import adminRoutes from './routes/admin.routes.js';
+import articleRoutes from './routes/article.routes.js';
+import studioRoutes from './routes/studio.routes.js';
 
 dotenv.config();
 const app = express();
@@ -24,6 +28,10 @@ app.use(express.json());
 app.use(helmet()); // autometic security headers
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/wikis', wikiRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/articles', articleRoutes);
+app.use('/api/studio', studioRoutes);
 
 // app.get('/api/health', (req, res) => {
 //   res.json({ status: 'ok', message: 'WikiWiki API is running' });

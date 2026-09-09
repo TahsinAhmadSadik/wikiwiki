@@ -16,18 +16,18 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
-        {/* Protected Dashboard/Studio/Admin Routes */}
+        {/* Public Landing & Article Viewer */}
+        <Route path="/" element={<LibraryPage />} />
+        <Route path="/wiki/:wikiSlug/:articleSlug" element={<ArticlePage />} />
+
+        {/* Authenticated-Only Protected Routes */}
         <Route element={<ProtectedRoute />}>
-          <Route path="/" element={<LibraryPage />} />
           <Route path="/admin" element={<AdminPanelPage />} />
           <Route path="/editor" element={<ArticleEditorPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
 
-        {/* Public/Authenticated Article Route */}
-        <Route path="/wiki/:wikiSlug/:articleSlug" element={<ArticlePage />} />
-
-        {/* Guest Authentication Routes */}
+        {/* Guest-Only Authentication Routes */}
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<AuthPage initialView="login" />} />
           <Route path="/register" element={<AuthPage initialView="register" />} />
@@ -35,7 +35,7 @@ export default function App() {
           <Route path="/verify-email" element={<VerifyEmailPage />} />
         </Route>
 
-        {/* Global 404 Catch-All */}
+        {/* Fallback 404 Route */}
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </ErrorBoundary>

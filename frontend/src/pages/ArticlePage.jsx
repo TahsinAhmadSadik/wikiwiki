@@ -47,9 +47,28 @@ export default function ArticlePage() {
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>
 
-            {/* CONTRIBUTE / EDIT BUTTON */}
+            {/* CONTRIBUTE / EDIT / LOGIN BUTTON */}
             <div>
-              {canEdit ? (
+              {!user ? (
+                <Link
+                  to="/login"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem',
+                    backgroundColor: '#18181b',
+                    color: '#f4f4f5',
+                    border: '1px solid #27272a',
+                    padding: '0.5rem 0.9rem',
+                    borderRadius: 6,
+                    fontSize: '0.85rem',
+                    fontWeight: 500,
+                    textDecoration: 'none'
+                  }}
+                >
+                  🔒 Log In to Contribute
+                </Link>
+              ) : canEdit ? (
                 <Link
                   to={`/editor?articleId=${article.article_id}`}
                   style={{

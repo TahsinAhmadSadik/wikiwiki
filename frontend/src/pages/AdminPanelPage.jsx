@@ -358,7 +358,7 @@ export default function AdminPanelPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                       <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{w.title}</h3>
                       <span style={{ fontSize: '0.7rem', color: roleBadge.color, backgroundColor: roleBadge.bg, padding: '0.2rem 0.5rem', borderRadius: 9999 }}>
-                        {roleBadge.icon} {roleBadge.label}
+                        <span style={{ color: roleBadge.color }}>{roleBadge.icon}</span> {roleBadge.label}
                       </span>
                     </div>
                     <p style={{ color: '#71717a', fontSize: '0.85rem', margin: '0 0 1rem 0' }}>{w.description || 'No description provided'}</p>

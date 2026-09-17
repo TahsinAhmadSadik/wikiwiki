@@ -10,6 +10,7 @@ import AdminPanelPage from './pages/AdminPanelPage';
 import ArticleEditorPage from './pages/ArticleEditorPage';
 import ArticlePage from './pages/ArticlePage';
 import NotFoundPage from './pages/NotFoundPage';
+import SearchPage from './pages/SearchPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ProtectedRoute, GuestRoute } from './components/RouteGuards';
 
@@ -17,6 +18,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
+        <Route path="/search" element={<SearchPage />} />
         {/* Public Discovery Landing Page */}
         <Route path="/" element={<HomePage />} />
 

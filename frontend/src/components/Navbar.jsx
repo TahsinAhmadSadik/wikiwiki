@@ -118,8 +118,15 @@ export default function Navbar() {
 
         {/* RIGHT: CONTROLS & AUTH */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <Link 
+                to="/search" 
+                style={{ color: location.pathname === '/search' ? '#fff' : '#a1a1aa', textDecoration: 'none' }}
+              >
+                Search
+              </Link>
           {user ? (
             <>
+
               <span style={{
                 display: 'inline-flex',
                 alignItems: 'center',

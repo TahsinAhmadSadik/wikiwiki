@@ -36,7 +36,7 @@ export const authenticateToken = async (req, res, next) => {
   }
 };
 
-// 1. Role-Based Access Control (RBAC) Guard
+// Role-Based Access Control (RBAC) Guard
 export const requireRole = (...allowedRoles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -54,7 +54,7 @@ export const requireRole = (...allowedRoles) => {
   };
 };
 
-// 2. Optional Auth (Doesn't fail if guest; attaches req.user if logged in)
+// Optional Auth (Doesn't fail if guest; attaches req.user if logged in)
 export const optionalAuth = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];

@@ -5,7 +5,7 @@ import { authorizeWikiAccess } from '../middleware/wikiAuth.js';
 
 const router = express.Router();
 
-// 1. GET ALL WIKIS THE CURRENT USER MANAGES (Author, Co-author, or All if Global Admin/Owner)
+// GET ALL WIKIS THE CURRENT USER MANAGES (Author, Co-author, or All if Global Admin/Owner)
 router.get('/managed', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.user_id;
@@ -55,7 +55,7 @@ router.get('/managed', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. CREATE WIKI: Contributor creates wiki -> becomes Author in wiki_memberships
+// CREATE WIKI: Contributor creates wiki -> becomes Author in wiki_memberships
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { title, description, category_id } = req.body;
@@ -103,7 +103,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// 3. ASSIGN CO-AUTHOR BY EMAIL: Primary Author or Global Admin adds another user
+// ASSIGN CO-AUTHOR BY EMAIL: Primary Author or Global Admin adds another user
 router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author'), async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -146,7 +146,7 @@ router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author')
   }
 });
 
-// 4. GET WIKI MEMBERS LIST
+// GET WIKI MEMBERS LIST
 router.get('/:wikiId/members', authenticateToken, authorizeWikiAccess('co_author'), async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);

@@ -4,7 +4,7 @@ import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// 1. SET GLOBAL ADMIN BY EMAIL (Site Owner Only)
+// SET GLOBAL ADMIN BY EMAIL (Site Owner Only)
 router.patch('/roles', authenticateToken, requireRole('owner'), async (req, res) => {
   try {
     const { email, role } = req.body;
@@ -48,7 +48,7 @@ router.patch('/roles', authenticateToken, requireRole('owner'), async (req, res)
   }
 });
 
-// 2. GLOBAL PLATFORM STATS (Owner and Global Admin Only)
+// GLOBAL PLATFORM STATS (Owner and Global Admin Only)
 router.get('/stats', authenticateToken, requireRole('owner', 'admin'), async (req, res) => {
   try {
     const usersCount = await prisma.$queryRaw`SELECT COUNT(*)::INT AS count FROM users;`;

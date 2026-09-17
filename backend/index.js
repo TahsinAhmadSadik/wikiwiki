@@ -33,36 +33,6 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/studio', studioRoutes);
 
-// app.get('/api/health', (req, res) => {
-//   res.json({ status: 'ok', message: 'WikiWiki API is running' });
-// });
-
-
-// for connectivity check
-
-app.get('/api/test-db', async (req, res) => {
-  try {
-    const result = await prisma.$queryRaw`
-      SELECT user_id, username, email, global_role
-      FROM users
-      WHERE user_id = ${1}
-    `;
-
-    res.json({
-      success: true,
-      user: result[0] || null
-    });
-
-  } catch (error) {
-    console.error('Database error:', error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
-  }
-});
-
 
 app.get('/api/categories', async (req, res) => {
   try {

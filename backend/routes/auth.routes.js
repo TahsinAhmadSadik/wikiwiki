@@ -298,7 +298,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
   try {
     await prisma.$executeRaw`
       UPDATE users
-      SET token_version = token_version + 1
+      SET token_version = token_version + ${process.env.TOKEN_UPDATE_KEY}::INT
       WHERE user_id = ${req.user.user_id};
     `;
 

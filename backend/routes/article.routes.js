@@ -4,7 +4,7 @@ import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// 1. CREATE ARTICLE (POST /api/articles)
+// CREATE ARTICLE (POST /api/articles)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { wiki_id, category_id, title, template_type = 'standard', content, edit_summary } = req.body;
@@ -88,7 +88,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. FETCH FOR EDITING (MUST BE ABOVE /:wikiSlug/:articleSlug TO AVOID ROUTE SHADOWING)
+// FETCH FOR EDITING (MUST BE ABOVE /:wikiSlug/:articleSlug TO AVOID ROUTE SHADOWING)
 router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -151,7 +151,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// 3. COMMIT NEW VERSION (POST /api/articles/:articleId/versions)
+// COMMIT NEW VERSION (POST /api/articles/:articleId/versions)
 router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -221,7 +221,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   }
 });
 
-// 4. GET ARTICLE BY SLUG (PUBLIC READER - MUST BE AT THE BOTTOM)
+// GET ARTICLE BY SLUG (PUBLIC READER - MUST BE AT THE BOTTOM)
 router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   try {
     const { wikiSlug, articleSlug } = req.params;
@@ -285,7 +285,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   }
 });
 
-// 1. GET PENDING REVISIONS FOR MANAGED WIKIS (For Authors, Co-Authors, and Global Admins)
+// GET PENDING REVISIONS FOR MANAGED WIKIS (For Authors, Co-Authors, and Global Admins)
 router.get('/pending-reviews', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.user_id;
@@ -348,7 +348,6 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. REVIEW VERSION: APPROVE OR REJECT REVISION
 // REVIEW VERSION: APPROVE OR REJECT REVISION
 router.post('/versions/:versionId/review', authenticateToken, async (req, res) => {
   try {

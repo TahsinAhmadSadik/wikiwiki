@@ -10,6 +10,7 @@ import wikiRoutes from './routes/wiki.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import articleRoutes from './routes/article.routes.js';
 import studioRoutes from './routes/studio.routes.js';
+import statsRoutes from './routes/stats.routes.js';
 
 dotenv.config();
 const app = express();
@@ -32,6 +33,7 @@ app.use('/api/wikis', wikiRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/studio', studioRoutes);
+app.use('/api/stats', statsRoutes);
 
 
 app.get('/api/categories', async (req, res) => {

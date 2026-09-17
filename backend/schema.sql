@@ -306,3 +306,165 @@ ALTER TABLE users ADD COLUMN has_onboarded BOOLEAN DEFAULT FALSE NOT NULL;
 
 --  default owner
 UPDATE users SET global_role = 'owner' WHERE email = 'tahsinahmadsadik@gmail.com';
+
+
+
+
+
+
+
+
+
+-- ============================================================================
+-- 1. TRIGGER: Automatic Full-Text Search Vector Generator
+-- ============================================================================
+CREATE OR REPLACE FUNCTION fn_trg_update_article_search_vector()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_title TEXT;
+    v_body TEXT := '';
+BEGIN
+    -- Retrieve parent article title
+    SELECT title INTO v_title 
+    FROM articles 
+    WHERE article_id = NEW.article_id;
+
+    -- Extract text strings from JSONB block array
+    SELECT COALESCE(string_agg(COALESCE(elem->'data'->>'text', elem->>'text', ''), ' '), '')
+    INTO v_body
+    FROM jsonb_array_elements(
+        CASE 
+            WHEN jsonb_typeof(NEW.content->'blocks') = 'array' THEN NEW.content->'blocks'
+            ELSE '[]'::jsonb
+        END
+    ) AS elem;
+
+    -- Combine Title (Weight A) and Body Content (Weight B) into tsvector
+    NEW.search_vector := 
+        setweight(to_tsvector('english', COALESCE(v_title, '')), 'A') ||
+        setweight(to_tsvector('english', COALESCE(v_body, '')), 'B');
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_article_versions_search_vector ON article_versions;
+
+CREATE TRIGGER trg_article_versions_search_vector
+BEFORE INSERT OR UPDATE OF content ON article_versions
+FOR EACH ROW
+EXECUTE FUNCTION fn_trg_update_article_search_vector();
+
+
+-- ============================================================================
+-- 2. STORED PROCEDURE: Resolve Report & Penalize Contributor
+-- ============================================================================
+CREATE OR REPLACE PROCEDURE sp_resolve_report_and_penalize(
+    p_report_id INT,
+    p_resolver_id INT,
+    p_action VARCHAR,
+    p_demerit_points INT DEFAULT 0
+)
+AS $$
+DECLARE
+    v_target_user_id INT;
+    v_new_demerits INT;
+BEGIN
+    -- 1. Verify and update the report status
+    UPDATE reports
+    SET status = p_action::report_status_enum,
+        resolver_id = p_resolver_id,
+        resolved_at = CURRENT_TIMESTAMP
+    WHERE report_id = p_report_id;
+
+    -- 2. Identify the editor associated with the reported version or article
+    SELECT av.editor_id INTO v_target_user_id
+    FROM reports r
+    LEFT JOIN article_versions av ON r.version_id = av.version_id
+    WHERE r.report_id = p_report_id;
+
+    -- Fallback to article creator if version editor is null
+    IF v_target_user_id IS NULL THEN
+        SELECT a.wiki_id INTO v_target_user_id 
+        FROM reports r 
+        INNER JOIN articles a ON r.article_id = a.article_id 
+        WHERE r.report_id = p_report_id;
+    END IF;
+
+    -- 3. Apply demerit points and check ban threshold
+    IF p_demerit_points > 0 AND v_target_user_id IS NOT NULL THEN
+        UPDATE users
+        SET demerit_points = demerit_points + p_demerit_points
+        WHERE user_id = v_target_user_id
+        RETURNING demerit_points INTO v_new_demerits;
+
+        -- Auto-ban policy: demerits >= 5 triggers ban and session revocation
+        IF v_new_demerits >= 5 THEN
+            UPDATE users
+            SET is_banned = TRUE,
+                token_version = token_version + 1
+            WHERE user_id = v_target_user_id;
+        END IF;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ============================================================================
+-- 3. FUNCTION (UDF): Time-Windowed & Category Subtree Article Ranking
+-- ============================================================================
+CREATE OR REPLACE FUNCTION fn_get_top_articles_by_time_and_topic(
+    p_category_id INT,
+    p_days INT,
+    p_limit INT
+)
+RETURNS TABLE (
+    article_id INT,
+    title VARCHAR,
+    slug VARCHAR,
+    wiki_title VARCHAR,
+    wiki_slug VARCHAR,
+    category_name VARCHAR,
+    read_count INT,
+    published_version INT,
+    created_at TIMESTAMP WITH TIME ZONE
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH RECURSIVE category_tree AS (
+        -- Root selection
+        SELECT c.category_id
+        FROM categories c
+        WHERE c.category_id = p_category_id
+        
+        UNION ALL
+        
+        -- Recursive descent into child categories
+        SELECT c_child.category_id
+        FROM categories c_child
+        INNER JOIN category_tree ct ON c_child.parent_category_id = ct.category_id
+    )
+    SELECT 
+        a.article_id::INT,
+        a.title,
+        a.slug,
+        w.title AS wiki_title,
+        w.slug AS wiki_slug,
+        cat.name AS category_name,
+        a.read_count::INT,
+        (
+            SELECT COALESCE(MAX(av.version_number), 1)::INT 
+            FROM article_versions av 
+            WHERE av.article_id = a.article_id AND av.is_published = TRUE
+        ) AS published_version,
+        a.created_at
+    FROM articles a
+    INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+    INNER JOIN categories cat ON a.category_id = cat.category_id
+    WHERE a.is_published = TRUE
+      AND a.category_id IN (SELECT ct.category_id FROM category_tree ct)
+      AND (p_days <= 0 OR a.created_at >= (CURRENT_TIMESTAMP - (p_days || ' days')::INTERVAL))
+    ORDER BY a.read_count DESC, a.created_at DESC
+    LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql;

@@ -678,3 +678,40 @@ BEGIN
     END IF;
 END;
 $$;
+
+
+
+
+
+
+
+
+-- 1. Create reading_lists table
+CREATE TABLE IF NOT EXISTS reading_lists (
+    list_id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    description TEXT DEFAULT '',
+    is_private BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. Create reading_list_items junction table
+CREATE TABLE IF NOT EXISTS reading_list_items (
+    item_id SERIAL PRIMARY KEY,
+    list_id INT NOT NULL REFERENCES reading_lists(list_id) ON DELETE CASCADE,
+    article_id INT NOT NULL REFERENCES articles(article_id) ON DELETE CASCADE,
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_reading_list_article UNIQUE (list_id, article_id)
+);
+
+-- 3. Performance Indexes
+CREATE INDEX IF NOT EXISTS idx_reading_lists_user_id ON reading_lists(user_id);
+CREATE INDEX IF NOT EXISTS idx_reading_list_items_list_id ON reading_list_items(list_id);
+CREATE INDEX IF NOT EXISTS idx_reading_list_items_article_id ON reading_list_items(article_id);
+
+
+
+
+ALTER TABLE reading_lists ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+ALTER TABLE reading_lists ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT TRUE;

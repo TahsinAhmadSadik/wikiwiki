@@ -7,14 +7,22 @@ import { api } from '../services/api';
 export default function ArticlePage() {
   const { wikiSlug, articleSlug } = useParams();
   const { user } = useAuth();
+  
+  // 1. Data states
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Report Modal State
+  // 2. Report modal states
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [reportStatus, setReportStatus] = useState({ text: '', type: '' });
+
+  // 3. Bookmark / Reading list states (MUST be declared before early returns)
+  const [isBookmarkOpen, setIsBookmarkOpen] = useState(false);
+  const [readingLists, setReadingLists] = useState([]);
+  const [newListTitle, setNewListTitle] = useState('');
+  const [creatingList, setCreatingList] = useState(false);
 
   useEffect(() => {
     const fetchArticle = async () => {
@@ -50,6 +58,46 @@ export default function ArticlePage() {
     }
   };
 
+  const loadReadingLists = async () => {
+    if (!user || !data?.article?.article_id) return;
+    try {
+      const res = await api.get(`/reading-lists/article-status/${data.article.article_id}`);
+      setReadingLists(res.lists || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleToggleList = async (listId) => {
+    try {
+      const res = await api.post(`/reading-lists/${listId}/toggle-article`, {
+        article_id: data.article.article_id
+      });
+      setReadingLists(prev => prev.map(l => l.list_id === listId ? { ...l, has_article: res.saved } : l));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleCreateList = async (e) => {
+    e.preventDefault();
+    if (!newListTitle.trim()) return;
+    setCreatingList(true);
+    try {
+      const res = await api.post('/reading-lists', { title: newListTitle.trim(), is_private: true });
+      await api.post(`/reading-lists/${res.list.list_id}/toggle-article`, {
+        article_id: data.article.article_id
+      });
+      setNewListTitle('');
+      loadReadingLists();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCreatingList(false);
+    }
+  };
+
+  // CONDITIONAL RETURNS MUST COME AFTER ALL HOOKS
   if (loading) return <div style={{ color: '#71717a', padding: '2rem' }}>Loading article...</div>;
   if (error) return <div style={{ color: '#ef4444', padding: '2rem' }}>{error}</div>;
 
@@ -147,6 +195,96 @@ export default function ArticlePage() {
                 >
                   🚩
                 </button>
+              )}
+
+              {user && (
+                <div style={{ position: 'relative' }}>
+                  <button
+                    onClick={() => {
+                      setIsBookmarkOpen(!isBookmarkOpen);
+                      if (!isBookmarkOpen) loadReadingLists();
+                    }}
+                    style={{
+                      background: isBookmarkOpen ? '#27272a' : 'none',
+                      border: '1px solid #27272a',
+                      color: '#f4f4f5',
+                      borderRadius: 6,
+                      padding: '0.5rem 0.75rem',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem'
+                    }}
+                    title="Save to Reading List"
+                  >
+                    🔖 Save
+                  </button>
+
+                  {/* BOOKMARK POPOVER */}
+                  {isBookmarkOpen && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '110%',
+                      right: 0,
+                      backgroundColor: '#0d0d0f',
+                      border: '1px solid #27272a',
+                      borderRadius: 8,
+                      padding: '1rem',
+                      width: 260,
+                      zIndex: 50,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.6)'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#fff' }}>Add to Reading List</span>
+                        <button
+                          onClick={() => setIsBookmarkOpen(false)}
+                          style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: '1rem' }}
+                        >
+                          ×
+                        </button>
+                      </div>
+
+                      <div style={{ maxHeight: 160, overflowY: 'auto', marginBottom: '0.75rem' }}>
+                        {readingLists.length === 0 ? (
+                          <p style={{ color: '#71717a', fontSize: '0.75rem', margin: 0 }}>No lists created yet.</p>
+                        ) : (
+                          readingLists.map(l => (
+                            <label key={l.list_id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0', cursor: 'pointer', fontSize: '0.8rem', color: '#d4d4d8' }}>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(l.has_article)}
+                                onChange={() => handleToggleList(l.list_id)}
+                              />
+                              <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {l.title}
+                              </span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+
+                      {/* QUICK CREATE LIST */}
+                      <form onSubmit={handleCreateList} style={{ borderTop: '1px solid #1f1f23', paddingTop: '0.6rem' }}>
+                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                          <input
+                            type="text"
+                            placeholder="New list name..."
+                            value={newListTitle}
+                            onChange={(e) => setNewListTitle(e.target.value)}
+                            className="auth-input"
+                            style={{ fontSize: '0.75rem', padding: '0.3rem 0.5rem' }}
+                          />
+                          <button
+                            type="submit"
+                            disabled={creatingList || !newListTitle.trim()}
+                            className="auth-btn"
+                            style={{ width: 'auto', padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                          >
+                            +
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+                </div>
               )}
 
               {!user ? (

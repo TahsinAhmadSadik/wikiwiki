@@ -4,6 +4,7 @@ import AuthPage from './pages/AuthPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import VerifyEmailPage from './pages/VerifyEmailPage';
 import SettingsPage from './pages/SettingsPage';
+import HomePage from './pages/HomePage';
 import LibraryPage from './pages/LibraryPage';
 import AdminPanelPage from './pages/AdminPanelPage';
 import ArticleEditorPage from './pages/ArticleEditorPage';
@@ -16,12 +17,15 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
-        {/* Public Landing & Article Viewer */}
-        <Route path="/" element={<LibraryPage />} />
+        {/* Public Discovery Landing Page */}
+        <Route path="/" element={<HomePage />} />
+
+        {/* Public Article Viewer */}
         <Route path="/wiki/:wikiSlug/:articleSlug" element={<ArticlePage />} />
 
         {/* Authenticated-Only Protected Routes */}
         <Route element={<ProtectedRoute />}>
+          <Route path="/studio" element={<LibraryPage />} />
           <Route path="/admin" element={<AdminPanelPage />} />
           <Route path="/editor" element={<ArticleEditorPage />} />
           <Route path="/settings" element={<SettingsPage />} />
@@ -35,7 +39,7 @@ export default function App() {
           <Route path="/verify-email" element={<VerifyEmailPage />} />
         </Route>
 
-        {/* Fallback 404 Route */}
+        {/* Global Fallback Route */}
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </ErrorBoundary>

@@ -11,6 +11,7 @@ import adminRoutes from './routes/admin.routes.js';
 import articleRoutes from './routes/article.routes.js';
 import studioRoutes from './routes/studio.routes.js';
 import statsRoutes from './routes/stats.routes.js';
+import homeRoutes from './routes/home.routes.js';
 
 dotenv.config();
 const app = express();
@@ -34,6 +35,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/studio', studioRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/home', homeRoutes);
 
 
 app.get('/api/categories', async (req, res) => {

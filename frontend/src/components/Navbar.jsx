@@ -42,23 +42,29 @@ export default function Navbar() {
         backgroundColor: '#0d0d0f',
         borderBottom: '1px solid #1f1f23'
       }}>
-        {/* LEFT BRAND & LINKS */}
+        {/* LEFT: BRAND & DIRECTORY */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
-          <Link to="/" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700, fontSize: '1.1rem' }}>
+          <Link to="/" style={{ color: '#fff', textDecoration: 'none', fontWeight: 700, fontSize: '1.15rem', letterSpacing: '-0.02em' }}>
             WikiWiki
           </Link>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', fontSize: '0.875rem' }}>
             <Link 
               to="/" 
-              style={{ color: location.pathname === '/' ? '#fff' : '#a1a1aa', textDecoration: 'none' }}
+              style={{ color: location.pathname === '/' ? '#fff' : '#a1a1aa', textDecoration: 'none', fontWeight: location.pathname === '/' ? 600 : 400 }}
             >
-              Library
+              Explore
             </Link>
 
-            {/* AUTHENTICATED ACTIONS ONLY */}
             {user && (
               <>
+                <Link 
+                  to="/studio" 
+                  style={{ color: location.pathname === '/studio' ? '#fff' : '#a1a1aa', textDecoration: 'none', fontWeight: location.pathname === '/studio' ? 600 : 400 }}
+                >
+                  Studio
+                </Link>
+
                 <Link 
                   to="/admin" 
                   style={{
@@ -66,7 +72,8 @@ export default function Navbar() {
                     textDecoration: 'none',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '0.4rem'
+                    gap: '0.4rem',
+                    fontWeight: location.pathname === '/admin' ? 600 : 400
                   }}
                 >
                   Admin Panel
@@ -86,7 +93,7 @@ export default function Navbar() {
 
                 <Link 
                   to="/editor" 
-                  style={{ color: location.pathname === '/editor' ? '#fff' : '#a1a1aa', textDecoration: 'none' }}
+                  style={{ color: location.pathname === '/editor' ? '#fff' : '#a1a1aa', textDecoration: 'none', fontWeight: location.pathname === '/editor' ? 600 : 400 }}
                 >
                   + New Article
                 </Link>
@@ -109,7 +116,7 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* RIGHT CONTROLS */}
+        {/* RIGHT: CONTROLS & AUTH */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           {user ? (
             <>

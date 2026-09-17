@@ -255,15 +255,22 @@ export default function SearchPage() {
                       Wiki Spaces ({wikis.length})
                     </h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
-                      {wikis.map(w => (
-                        <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1rem', borderRadius: 6 }}>
-                          <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>{w.title}</h4>
-                          <p style={{ margin: '0 0 0.5rem 0', color: '#71717a', fontSize: '0.8rem' }}>{w.description}</p>
-                          <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                            {w.article_count} articles • {w.total_views} views
-                          </span>
-                        </div>
-                      ))}
+                        {wikis.map(w => (
+                            <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1rem', borderRadius: 6 }}>
+                                <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>
+                                <Link 
+                                    to={`/wiki/${w.slug}`} 
+                                    style={{ color: '#fff', textDecoration: 'none' }}
+                                >
+                                    {w.title}
+                                </Link>
+                                </h4>
+                                <p style={{ margin: '0 0 0.5rem 0', color: '#71717a', fontSize: '0.8rem' }}>{w.description}</p>
+                                <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                                {w.article_count} articles • {w.total_views} views
+                                </span>
+                            </div>
+                        ))}
                     </div>
                   </div>
                 )}
@@ -294,9 +301,15 @@ export default function SearchPage() {
                             alignItems: 'center'
                           }}>
                             <div>
-                              <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                                {art.wiki_title} • {art.category_name || 'General'}
-                              </span>
+                                <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                                    <Link 
+                                        to={`/wiki/${art.wiki_slug}`} 
+                                        style={{ color: '#a855f7', textDecoration: 'none' }}
+                                    >
+                                        {art.wiki_title}
+                                    </Link>{' '}
+                                    • {art.category_name || 'General'}
+                                </span>
                               <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>
                                 <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
                                   {art.title}

@@ -42,7 +42,13 @@ export default function ArticlePage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
               <span style={{ fontSize: '0.85rem', color: '#a1a1aa' }}>
-                Wiki: <Link to="/" style={{ color: '#fff', textDecoration: 'none' }}>{article.wiki_title}</Link>
+                Wiki:{' '}
+                <Link 
+                  to={`/wiki/${article.wiki_slug || wikiSlug}`} 
+                  style={{ color: '#a855f7', textDecoration: 'none', fontWeight: 500 }}
+                >
+                  {article.wiki_title}
+                </Link>
               </span>
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>

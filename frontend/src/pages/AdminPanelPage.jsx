@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import CreateWikiModal from '../components/CreateWikiModal';
 import { useAuth } from '../context/AuthContext';
@@ -246,7 +247,15 @@ export default function AdminPanelPage() {
                 <div key={rev.version_id} style={{ backgroundColor: '#141417', border: '1px solid #27272a', borderRadius: 6, padding: '1.25rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
                     <div>
-                      <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>Wiki: {rev.wiki_title}</span>
+                      <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                        Wiki:{' '}
+                        <Link 
+                          to={`/wiki/${rev.wiki_slug}`} 
+                          style={{ color: '#a855f7', textDecoration: 'none' }}
+                        >
+                          {rev.wiki_title}
+                        </Link>
+                      </span>
                       <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>{rev.article_title} (v{rev.version_number})</h3>
                       <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
                         Submitted by <strong>{rev.contributor_name}</strong> ({rev.contributor_email}) on {new Date(rev.created_at).toLocaleString()}
@@ -356,7 +365,12 @@ export default function AdminPanelPage() {
                 return (
                   <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{w.title}</h3>
+                      <Link 
+                        to={`/wiki/${w.slug}`} 
+                        style={{ color: '#fff', textDecoration: 'none' }}
+                      >
+                        {w.title}
+                      </Link>
                       <span style={{ fontSize: '0.7rem', color: roleBadge.color, backgroundColor: roleBadge.bg, padding: '0.2rem 0.5rem', borderRadius: 9999 }}>
                         <span style={{ color: roleBadge.color }}>{roleBadge.icon}</span> {roleBadge.label}
                       </span>

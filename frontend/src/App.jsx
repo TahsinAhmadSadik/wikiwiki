@@ -11,6 +11,7 @@ import ArticleEditorPage from './pages/ArticleEditorPage';
 import ArticlePage from './pages/ArticlePage';
 import NotFoundPage from './pages/NotFoundPage';
 import SearchPage from './pages/SearchPage';
+import WikiPage from './pages/WikiPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ProtectedRoute, GuestRoute } from './components/RouteGuards';
 
@@ -19,12 +20,15 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route path="/search" element={<SearchPage />} />
-        {/* Public Discovery Landing Page */}
-        <Route path="/" element={<HomePage />} />
-
+        <Route path="/wiki/:wikiSlug" element={<WikiPage />} />
+        <Route path="/wiki/:wikiSlug/:articleSlug" element={<ArticlePage />} />
         {/* Public Article Viewer */}
         <Route path="/wiki/:wikiSlug/:articleSlug" element={<ArticlePage />} />
-
+        {/* Global Fallback Route */}
+        <Route path="*" element={<NotFoundPage />} />
+        {/* Public Discovery Landing Page */}
+        <Route path="/" element={<HomePage />} />
+        
         {/* Authenticated-Only Protected Routes */}
         <Route element={<ProtectedRoute />}>
           <Route path="/studio" element={<LibraryPage />} />
@@ -40,9 +44,6 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
         </Route>
-
-        {/* Global Fallback Route */}
-        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </ErrorBoundary>
   );

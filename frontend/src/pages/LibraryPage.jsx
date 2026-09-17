@@ -132,7 +132,14 @@ export default function LibraryPage() {
                   data.published.map((art) => (
                     <div key={art.article_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
-                        <span style={{ fontSize: '0.75rem', color: '#71717a' }}>{art.wiki_title}</span>
+                        <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
+                          <Link 
+                            to={`/wiki/${art.wiki_slug}`} 
+                            style={{ color: '#a1a1aa', textDecoration: 'none' }}
+                          >
+                            {art.wiki_title}
+                          </Link>
+                        </span>
                         <h3 style={{ margin: '0.2rem 0', fontSize: '1.1rem' }}>{art.title}</h3>
                         <span style={{ fontSize: '0.8rem', color: '#a1a1aa' }}>
                           Live Version: v{art.published_version} • {art.read_count} reads

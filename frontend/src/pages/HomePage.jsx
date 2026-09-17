@@ -159,12 +159,19 @@ export default function HomePage() {
                 justifyContent: 'space-between'
               }}>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{wiki.title}</h3>
-                    <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
-                      ⚡ {wiki.velocity_score}
-                    </span>
-                  </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
+                            <Link 
+                            to={`/wiki/${wiki.slug}`} 
+                            style={{ color: '#fff', textDecoration: 'none' }}
+                            >
+                            {wiki.title}
+                            </Link>
+                        </h3>
+                        <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
+                            ⚡ {wiki.velocity_score}
+                        </span>
+                    </div>
                   <p style={{ color: '#71717a', fontSize: '0.825rem', margin: '0.5rem 0 1rem 0' }}>
                     {wiki.description || 'No description available'}
                   </p>
@@ -411,7 +418,15 @@ export default function HomePage() {
                   alignItems: 'center'
                 }}>
                   <div>
-                    <span style={{ fontSize: '0.75rem', color: '#a855f7' }}>{art.category_name} • {art.wiki_title}</span>
+                    <span style={{ fontSize: '0.75rem', color: '#a855f7' }}>
+                        {art.category_name} •{' '}
+                        <Link 
+                            to={`/wiki/${art.wiki_slug}`} 
+                            style={{ color: '#a855f7', textDecoration: 'underline' }}
+                        >
+                            {art.wiki_title}
+                        </Link>
+                    </span>
                     <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>
                       <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
                         {art.title}

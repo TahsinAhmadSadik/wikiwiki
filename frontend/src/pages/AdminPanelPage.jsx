@@ -12,6 +12,7 @@ export default function AdminPanelPage() {
   const [wikis, setWikis] = useState([]);
   const [globalStats, setGlobalStats] = useState(null);
   const [pendingReviews, setPendingReviews] = useState([]);
+  const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [reviewActionMsg, setReviewActionMsg] = useState({ text: '', type: '' });
@@ -19,6 +20,9 @@ export default function AdminPanelPage() {
   // Inspection modal state
   const [inspectingVersion, setInspectingVersion] = useState(null);
   const [approvalFeedback, setApprovalFeedback] = useState('');
+
+  // Demerit selection per report
+  const [demeritSelections, setDemeritSelections] = useState({});
 
   // Co-author form
   const [selectedWikiId, setSelectedWikiId] = useState('');
@@ -34,13 +38,15 @@ export default function AdminPanelPage() {
 
   const fetchAdminData = async () => {
     try {
-      const [wikisRes, pendingRes] = await Promise.all([
+      const [wikisRes, pendingRes, reportRes] = await Promise.all([
         api.get('/wikis/managed'),
-        api.get('/articles/pending-reviews')
+        api.get('/articles/pending-reviews'),
+        api.get('/reports/pending')
       ]);
 
       setWikis(wikisRes.wikis || []);
       setPendingReviews(pendingRes.pending || []);
+      setReports(reportRes.reports || []);
 
       if (isGlobalAdmin) {
         const statsRes = await api.get('/admin/stats');
@@ -68,6 +74,22 @@ export default function AdminPanelPage() {
       setPendingReviews((prev) => prev.filter((r) => r.version_id !== versionId));
       setInspectingVersion(null);
       setApprovalFeedback('');
+    } catch (err) {
+      setReviewActionMsg({ text: err.data?.message || err.message, type: 'error' });
+    }
+  };
+
+  const handleResolveReport = async (reportId, action) => {
+    setReviewActionMsg({ text: '', type: '' });
+    const demerits = Number(demeritSelections[reportId] || 0);
+
+    try {
+      const res = await api.post(`/reports/${reportId}/resolve`, {
+        action,
+        demerit_points: action === 'resolved' ? demerits : 0
+      });
+      setReviewActionMsg({ text: res.message, type: 'success' });
+      setReports((prev) => prev.filter((r) => r.report_id !== reportId));
     } catch (err) {
       setReviewActionMsg({ text: err.data?.message || err.message, type: 'error' });
     }
@@ -132,7 +154,6 @@ export default function AdminPanelPage() {
               </div>
             </header>
 
-            {/* VERSION CONTENT PREVIEW */}
             <div style={{ overflowY: 'auto', flex: 1, paddingRight: '0.5rem', marginBottom: '1.25rem' }}>
               <h4 style={{ fontSize: '0.85rem', color: '#71717a', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
                 Proposed Article Content:
@@ -158,7 +179,6 @@ export default function AdminPanelPage() {
               </div>
             </div>
 
-            {/* MODAL ACTIONS */}
             <footer style={{ borderTop: '1px solid #1f1f23', paddingTop: '1rem' }}>
               <input
                 type="text"
@@ -203,7 +223,7 @@ export default function AdminPanelPage() {
           <div>
             <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>Admin Dashboard</h1>
             <p style={{ color: '#a1a1aa', margin: 0, fontSize: '0.9rem' }}>
-              Confirm contributor submissions, manage wiki memberships, and monitor platform statistics.
+              Confirm contributor submissions, resolve moderation reports, and manage wiki spaces.
             </p>
           </div>
           <button
@@ -222,7 +242,7 @@ export default function AdminPanelPage() {
           </div>
         )}
 
-        {/* REVIEW QUEUE */}
+        {/* 1. REVISION REVIEW QUEUE */}
         <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
@@ -249,10 +269,7 @@ export default function AdminPanelPage() {
                     <div>
                       <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
                         Wiki:{' '}
-                        <Link 
-                          to={`/wiki/${rev.wiki_slug}`} 
-                          style={{ color: '#a855f7', textDecoration: 'none' }}
-                        >
+                        <Link to={`/wiki/${rev.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
                           {rev.wiki_title}
                         </Link>
                       </span>
@@ -299,14 +316,103 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* GLOBAL STATS */}
+        {/* 2. MODERATION REPORTS QUEUE (CALLS STORED PROCEDURE) */}
+        <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #ef444430', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
+              Flagged Article Reports ({reports.length})
+            </h2>
+            {reports.length > 0 && (
+              <span style={{ fontSize: '0.75rem', backgroundColor: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '0.2rem 0.6rem', borderRadius: 9999 }}>
+                Moderation Needed
+              </span>
+            )}
+          </div>
+
+          {loading ? (
+            <p style={{ color: '#71717a' }}>Loading reports...</p>
+          ) : reports.length === 0 ? (
+            <p style={{ color: '#71717a', margin: 0, fontSize: '0.9rem' }}>
+              No pending violation reports on your managed wikis. Clean record!
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {reports.map((rep) => (
+                <div key={rep.report_id} style={{ backgroundColor: '#141417', border: '1px solid #27272a', borderRadius: 6, padding: '1.25rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                    <div>
+                      <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                        Wiki:{' '}
+                        <Link to={`/wiki/${rep.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
+                          {rep.wiki_title}
+                        </Link>
+                      </span>
+                      <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>
+                        <Link to={`/wiki/${rep.wiki_slug}/${rep.article_slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                          {rep.article_title}
+                        </Link>
+                      </h3>
+                      <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
+                        Reported by <strong>{rep.reporter_name}</strong> on {new Date(rep.created_at).toLocaleString()}
+                      </span>
+                    </div>
+
+                    {/* ACTIONS: PROCEDURE DISPATCH */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <select
+                        value={demeritSelections[rep.report_id] || '0'}
+                        onChange={(e) => setDemeritSelections({ ...demeritSelections, [rep.report_id]: e.target.value })}
+                        className="auth-input"
+                        style={{ width: 'auto', padding: '0.35rem 0.5rem', fontSize: '0.75rem', backgroundColor: '#09090b' }}
+                      >
+                        <option value="0">0 Demerits (Warning)</option>
+                        <option value="1">1 Demerit</option>
+                        <option value="2">2 Demerits</option>
+                        <option value="5">5 Demerits (Instant Ban)</option>
+                      </select>
+
+                      <button
+                        onClick={() => handleResolveReport(rep.report_id, 'dismissed')}
+                        style={{
+                          backgroundColor: '#18181b',
+                          color: '#a1a1aa',
+                          border: '1px solid #27272a',
+                          padding: '0.45rem 0.75rem',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        Dismiss
+                      </button>
+
+                      <button
+                        onClick={() => handleResolveReport(rep.report_id, 'resolved')}
+                        className="auth-btn"
+                        style={{ width: 'auto', padding: '0.45rem 0.95rem', fontSize: '0.8rem', backgroundColor: '#ef4444', borderColor: '#ef4444' }}
+                      >
+                        Penalize & Resolve
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ backgroundColor: '#09090b', padding: '0.75rem', borderRadius: 4, marginTop: '0.75rem', fontSize: '0.825rem' }}>
+                    <strong style={{ color: '#ef4444' }}>Report Reason:</strong> {rep.reason}
+                    {rep.editor_name && (
+                      <span style={{ marginLeft: '1rem', color: '#71717a' }}>
+                        Target Contributor: <strong>{rep.editor_name}</strong> (Current Demerits: {rep.editor_demerits})
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* 3. GLOBAL PLATFORM STATS */}
         {isGlobalAdmin && globalStats && (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: '1rem',
-            marginBottom: '2rem'
-          }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '2.5rem' }}>
             <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6 }}>
               <span style={{ fontSize: '0.8rem', color: '#71717a' }}>Total Platform Users</span>
               <h2 style={{ margin: '0.25rem 0 0 0', fontSize: '1.5rem' }}>{globalStats.total_users}</h2>
@@ -326,9 +432,9 @@ export default function AdminPanelPage() {
           </div>
         )}
 
-        {/* SITE OWNER CONTROLS */}
+        {/* 4. SITE OWNER CONTROLS */}
         {isOwner && (
-          <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #a855f750', padding: '1.5rem', borderRadius: 8, marginBottom: '2rem' }}>
+          <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #a855f750', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
             <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0', color: '#a855f7' }}>👑 Site Owner Controls</h2>
             <p style={{ fontSize: '0.85rem', color: '#a1a1aa', margin: '0 0 1rem 0' }}>
               Assign any registered contributor as a Global Admin by email.
@@ -353,7 +459,7 @@ export default function AdminPanelPage() {
           </section>
         )}
 
-        {/* MANAGED WIKIS */}
+        {/* 5. YOUR MANAGED WIKIS */}
         <section style={{ marginBottom: '2.5rem' }}>
           <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Your Managed Wikis</h2>
           {wikis.length === 0 ? (
@@ -365,14 +471,21 @@ export default function AdminPanelPage() {
                 return (
                   <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <Link 
-                        to={`/wiki/${w.slug}`} 
-                        style={{ color: '#fff', textDecoration: 'none' }}
-                      >
-                        {w.title}
-                      </Link>
-                      <span style={{ fontSize: '0.7rem', color: roleBadge.color, backgroundColor: roleBadge.bg, padding: '0.2rem 0.5rem', borderRadius: 9999 }}>
-                        <span style={{ color: roleBadge.color }}>{roleBadge.icon}</span> {roleBadge.label}
+                      <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
+                        <Link to={`/wiki/${w.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                          {w.title}
+                        </Link>
+                      </h3>
+                      <span style={{
+                        fontSize: '0.7rem',
+                        color: roleBadge?.color || '#a1a1aa',
+                        backgroundColor: roleBadge?.bg || '#1f1f23',
+                        border: `1px solid ${roleBadge?.color || '#3f3f46'}40`,
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: 9999
+                      }}>
+                        {roleBadge?.icon && <span style={{ color: roleBadge.color, marginRight: '0.25rem' }}>{roleBadge.icon}</span>}
+                        {roleBadge?.label || w.user_role}
                       </span>
                     </div>
                     <p style={{ color: '#71717a', fontSize: '0.85rem', margin: '0 0 1rem 0' }}>{w.description || 'No description provided'}</p>
@@ -387,7 +500,7 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* ADD CO-AUTHOR */}
+        {/* 6. ADD CO-AUTHOR */}
         {wikis.length > 0 && (
           <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.5rem', borderRadius: 8 }}>
             <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0' }}>Add Co-Author to a Wiki</h2>

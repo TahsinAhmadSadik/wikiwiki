@@ -11,6 +11,11 @@ export default function ArticlePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Report Modal State
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportStatus, setReportStatus] = useState({ text: '', type: '' });
+
   useEffect(() => {
     const fetchArticle = async () => {
       try {
@@ -25,6 +30,26 @@ export default function ArticlePage() {
     fetchArticle();
   }, [wikiSlug, articleSlug]);
 
+  const handleSubmitReport = async (e) => {
+    e.preventDefault();
+    setReportStatus({ text: '', type: '' });
+    try {
+      const res = await api.post('/reports', {
+        article_id: data.article.article_id,
+        version_id: data.latestVersion?.version_id,
+        reason: reportReason
+      });
+      setReportStatus({ text: res.message, type: 'success' });
+      setTimeout(() => {
+        setIsReportOpen(false);
+        setReportReason('');
+        setReportStatus({ text: '', type: '' });
+      }, 1800);
+    } catch (err) {
+      setReportStatus({ text: err.data?.message || err.message, type: 'error' });
+    }
+  };
+
   if (loading) return <div style={{ color: '#71717a', padding: '2rem' }}>Loading article...</div>;
   if (error) return <div style={{ color: '#ef4444', padding: '2rem' }}>{error}</div>;
 
@@ -37,24 +62,93 @@ export default function ArticlePage() {
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
       <Navbar />
 
+      {/* REPORT MODAL */}
+      {isReportOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 480 }}>
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.2rem' }}>Report Article</h3>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: '0 0 1rem 0' }}>
+              Flag inaccurate information, vandalism, or policy violations to the moderators.
+            </p>
+
+            {reportStatus.text && (
+              <div className={`auth-alert ${reportStatus.type}`} style={{ marginBottom: '1rem' }}>
+                {reportStatus.text}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitReport}>
+              <textarea
+                required
+                rows={4}
+                placeholder="Describe the issue with this revision..."
+                value={reportReason}
+                onChange={(e) => setReportReason(e.target.value)}
+                className="auth-input"
+                style={{ width: '100%', resize: 'vertical', marginBottom: '1rem' }}
+              />
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsReportOpen(false)}
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: '#a1a1aa',
+                    border: '1px solid #27272a',
+                    padding: '0.45rem 1rem',
+                    borderRadius: 6,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="auth-btn"
+                  style={{ width: 'auto', backgroundColor: '#ef4444', borderColor: '#ef4444' }}
+                >
+                  Submit Report
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       <main style={{ maxWidth: 800, margin: '2.5rem auto', padding: '0 1.5rem' }}>
         <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '1.25rem', marginBottom: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
               <span style={{ fontSize: '0.85rem', color: '#a1a1aa' }}>
                 Wiki:{' '}
-                <Link 
-                  to={`/wiki/${article.wiki_slug || wikiSlug}`} 
-                  style={{ color: '#a855f7', textDecoration: 'none', fontWeight: 500 }}
-                >
+                <Link to={`/wiki/${article.wiki_slug || wikiSlug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
                   {article.wiki_title}
                 </Link>
               </span>
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>
 
-            {/* CONTRIBUTE / EDIT / LOGIN BUTTON */}
-            <div>
+            {/* ACTION CONTROLS */}
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              {user && (
+                <button
+                  onClick={() => setIsReportOpen(true)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid #27272a',
+                    color: '#71717a',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="Report Article"
+                >
+                  🚩
+                </button>
+              )}
+
               {!user ? (
                 <Link
                   to="/login"

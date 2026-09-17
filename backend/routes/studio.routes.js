@@ -54,17 +54,18 @@ router.get('/library', authenticateToken, async (req, res) => {
     const userReports = await prisma.$queryRaw`
       SELECT 
         r.report_id::INT AS report_id,
-        r.reason,
         r.status,
+        r.reason,
+        COALESCE(r.demerit_points, 0)::INT AS demerit_points,
         r.created_at,
         a.title AS article_title,
-        w.slug AS wiki_slug,
-        a.slug AS article_slug
+        a.slug AS article_slug,
+        w.slug AS wiki_slug
       FROM reports r
       INNER JOIN articles a ON r.article_id = a.article_id
       INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
-      INNER JOIN article_versions av ON r.version_id = av.version_id
-      WHERE av.editor_id = ${userId}
+      LEFT JOIN article_versions av ON r.version_id = av.version_id
+      WHERE av.editor_id = ${req.user.user_id}
       ORDER BY r.created_at DESC;
     `;
 

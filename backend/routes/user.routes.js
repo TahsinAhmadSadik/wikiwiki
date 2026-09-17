@@ -16,6 +16,8 @@ router.get('/me', authenticateToken, async (req, res) => {
         email,
         bio,
         global_role,
+        COALESCE(demerit_points, 0)::INT AS demerit_points,
+        is_banned,
         has_onboarded,
         created_at
       FROM users
@@ -28,19 +30,14 @@ router.get('/me', authenticateToken, async (req, res) => {
     }
 
     const followedCategories = await prisma.$queryRaw`
-      SELECT 
-        c.category_id::INT AS category_id, 
-        c.name
+      SELECT c.category_id::INT AS category_id, c.name
       FROM categories c
       INNER JOIN user_category_follows ucf ON c.category_id = ucf.category_id
       WHERE ucf.user_id = ${req.user.user_id};
     `;
 
     const followedWikis = await prisma.$queryRaw`
-      SELECT 
-        w.wiki_id::INT AS wiki_id, 
-        w.title, 
-        w.slug
+      SELECT w.wiki_id::INT AS wiki_id, w.title, w.slug
       FROM wiki_spaces w
       INNER JOIN user_wiki_follows uwf ON w.wiki_id = uwf.wiki_id
       WHERE uwf.user_id = ${req.user.user_id};

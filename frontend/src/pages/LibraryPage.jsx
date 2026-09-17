@@ -6,9 +6,10 @@ import { api } from '../services/api';
 import '../styles/auth.css';
 
 export default function LibraryPage() {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const [tab, setTab] = useState('published');
   const [data, setData] = useState({ published: [], pending: [], reports: [] });
+  const [demerits, setDemerits] = useState(user?.demerit_points || 0);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -21,8 +22,18 @@ export default function LibraryPage() {
     const fetchLibrary = async () => {
       setErrorMsg('');
       try {
-        const res = await api.get('/studio/library');
+        const [res, meRes] = await Promise.all([
+          api.get('/studio/library'),
+          api.get('/users/me')
+        ]);
         setData(res);
+        if (meRes.user) {
+          const liveDemerits = meRes.user.demerit_points || 0;
+          setDemerits(liveDemerits);
+          if (updateUser) {
+            updateUser(meRes.user);
+          }
+        }
       } catch (err) {
         setErrorMsg(err.data?.message || err.message || 'Failed to load library resources.');
       } finally {
@@ -31,7 +42,7 @@ export default function LibraryPage() {
     };
 
     fetchLibrary();
-  }, [user]);
+  }, [user?.user_id]);
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
@@ -45,7 +56,6 @@ export default function LibraryPage() {
           </p>
         </header>
 
-        {/* Server Validation / Network Error Banner */}
         {errorMsg && (
           <div className="auth-alert error" style={{ marginBottom: '1.5rem' }}>
             {errorMsg}
@@ -79,6 +89,7 @@ export default function LibraryPage() {
           <div style={{ color: '#71717a' }}>Loading library...</div>
         ) : (
           <div>
+            {/* TABS */}
             <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid #1f1f23', marginBottom: '1.5rem' }}>
               <button
                 onClick={() => setTab('published')}
@@ -124,6 +135,7 @@ export default function LibraryPage() {
               </button>
             </div>
 
+            {/* PUBLISHED TAB */}
             {tab === 'published' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {data.published.length === 0 ? (
@@ -133,10 +145,7 @@ export default function LibraryPage() {
                     <div key={art.article_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
                         <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
-                          <Link 
-                            to={`/wiki/${art.wiki_slug}`} 
-                            style={{ color: '#a1a1aa', textDecoration: 'none' }}
-                          >
+                          <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a1a1aa', textDecoration: 'none' }}>
                             {art.wiki_title}
                           </Link>
                         </span>
@@ -154,6 +163,7 @@ export default function LibraryPage() {
               </div>
             )}
 
+            {/* PENDING APPROVAL TAB */}
             {tab === 'pending' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {data.pending.length === 0 ? (
@@ -170,7 +180,12 @@ export default function LibraryPage() {
                         </span>
                       </div>
                       <h3 style={{ margin: '0.2rem 0 0.4rem 0', fontSize: '1.1rem' }}>{rev.article_title}</h3>
-                      <p style={{ margin: '0 0 0.5rem 0', color: '#a1a1aa', fontSize: '0.85rem' }}>Wiki Space: {rev.wiki_title}</p>
+                      <p style={{ margin: '0 0 0.5rem 0', color: '#a1a1aa', fontSize: '0.85rem' }}>
+                        Wiki Space:{' '}
+                        <Link to={`/wiki/${rev.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
+                          {rev.wiki_title}
+                        </Link>
+                      </p>
                       <div style={{ backgroundColor: '#141417', padding: '0.65rem 0.85rem', borderRadius: 4, fontSize: '0.8rem', color: '#d4d4d8' }}>
                         <strong>Edit Summary:</strong> {rev.edit_summary || 'No description provided'}
                       </div>
@@ -180,20 +195,113 @@ export default function LibraryPage() {
               </div>
             )}
 
+            {/* REPORTS & MODERATION TAB */}
             {tab === 'reports' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div>
+                {/* CONTRIBUTOR STANDING CALLOUT */}
+                <div style={{
+                  backgroundColor: '#0d0d0f',
+                  border: demerits > 0 ? '1px solid #ef444450' : '1px solid #1f1f23',
+                  borderRadius: 6,
+                  padding: '1rem 1.25rem',
+                  marginBottom: '1.25rem',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem'
+                }}>
+                  <div>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#fff' }}>Your Contributor Standing</span>
+                    <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.8rem', color: '#a1a1aa' }}>
+                      {demerits === 0
+                        ? 'Zero demerit points. None of your submitted articles have received confirmed violation penalties.'
+                        : 'You have active demerits. Reaching 5 points results in an automatic account ban.'}
+                    </p>
+                  </div>
+                  <span style={{
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    padding: '0.3rem 0.75rem',
+                    borderRadius: 4,
+                    backgroundColor: demerits > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                    color: demerits > 0 ? '#ef4444' : '#10b981',
+                    border: `1px solid ${demerits > 0 ? '#ef444440' : '#10b98140'}`
+                  }}>
+                    {demerits} / 5 Demerits
+                  </span>
+                </div>
+
                 {data.reports.length === 0 ? (
-                  <p style={{ color: '#71717a' }}>No moderation reports on your articles.</p>
+                  <p style={{ color: '#71717a' }}>No moderation reports filed on your revisions.</p>
                 ) : (
-                  data.reports.map((rep) => (
-                    <div key={rep.report_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6 }}>
-                      <span style={{ fontSize: '0.75rem', color: rep.status === 'pending' ? '#ef4444' : '#10b981', textTransform: 'uppercase' }}>
-                        [{rep.status}]
-                      </span>
-                      <h4 style={{ margin: '0.25rem 0' }}>Article: {rep.article_title}</h4>
-                      <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: 0 }}>Reason: {rep.reason}</p>
-                    </div>
-                  ))
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {data.reports.map((rep) => {
+                      const isPending = rep.status === 'pending';
+                      const isResolved = rep.status === 'resolved';
+                      const reportDemerits = rep.demerit_points ?? (demerits > 0 ? demerits : 0);
+                      const isWarningOnly = isResolved && reportDemerits === 0;
+
+                      // Badge configuration based on outcome
+                      let badgeText = 'Report Dismissed';
+                      let badgeColor = '#10b981';
+                      let badgeBg = 'rgba(16, 185, 129, 0.15)';
+                      let borderColor = '#10b98140';
+
+                      if (isPending) {
+                        badgeText = 'Under Review';
+                        badgeColor = '#f59e0b';
+                        badgeBg = 'rgba(245, 158, 11, 0.15)';
+                        borderColor = '#f59e0b40';
+                      } else if (isWarningOnly) {
+                        badgeText = 'Resolved with Warning (0 Demerits)';
+                        badgeColor = '#34d399';
+                        badgeBg = 'rgba(52, 211, 153, 0.12)';
+                        borderColor = 'rgba(52, 211, 153, 0.3)';
+                      } else if (isResolved) {
+                        badgeText = `Violation Confirmed (+${reportDemerits} Demerit${reportDemerits > 1 ? 's' : ''})`;
+                        badgeColor = '#ef4444';
+                        badgeBg = 'rgba(239, 68, 68, 0.15)';
+                        borderColor = 'rgba(239, 68, 68, 0.3)';
+                      }
+
+                      return (
+                        <div key={rep.report_id} style={{
+                          backgroundColor: '#0d0d0f',
+                          border: `1px solid ${borderColor}`,
+                          padding: '1.25rem',
+                          borderRadius: 6
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                            <span style={{
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              padding: '0.2rem 0.55rem',
+                              borderRadius: 4,
+                              textTransform: 'uppercase',
+                              backgroundColor: badgeBg,
+                              color: badgeColor,
+                              border: `1px solid ${badgeColor}30`
+                            }}>
+                              {badgeText}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
+                              Reported on {new Date(rep.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+
+                          <h4 style={{ margin: '0.35rem 0 0.2rem 0', fontSize: '1.05rem' }}>
+                            <Link to={`/wiki/${rep.wiki_slug}/${rep.article_slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                              {rep.article_title}
+                            </Link>
+                          </h4>
+                          <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: 0 }}>
+                            <strong>Reason:</strong> {rep.reason}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}

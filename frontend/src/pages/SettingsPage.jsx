@@ -11,6 +11,7 @@ export default function SettingsPage() {
 
   const [activeTab, setActiveTab] = useState('profile');
 
+  const [userData, setUserData] = useState(null);
   const [bio, setBio] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -34,7 +35,9 @@ export default function SettingsPage() {
       try {
         const res = await api.get('/users/me');
         if (res.user) {
+          setUserData(res.user);
           setBio(res.user.bio || '');
+          updateUser(res.user);
         }
         if (res.interests) {
           setFollowedCategories(res.interests.categories || []);
@@ -128,7 +131,6 @@ export default function SettingsPage() {
       await api.delete('/users/account', {
         body: { confirm_email: deleteConfirmationEmail.trim() },
       });
-      // Purge state and route back to register
       await logout();
       navigate('/register');
     } catch (err) {
@@ -141,12 +143,14 @@ export default function SettingsPage() {
     return <div className="settings-container" style={{ color: '#71717a' }}>Loading settings...</div>;
   }
 
+  const demerits = userData?.demerit_points ?? user?.demerit_points ?? 0;
+
   return (
     <div className="settings-container">
       {/* TOP NAVIGATION */}
       <header className="settings-topbar">
         <Link to="/" className="topbar-link">
-          ← Back to Dashboard
+          ← Back to Explore
         </Link>
         <button onClick={logout} className="topbar-btn">
           Log out
@@ -155,7 +159,7 @@ export default function SettingsPage() {
 
       <div className="settings-header">
         <h1>Account Settings</h1>
-        <p>Manage your account credentials, public profile, and wiki preferences</p>
+        <p>Manage your credentials, contributor standing, and wiki preferences</p>
       </div>
 
       <nav className="settings-nav">
@@ -187,37 +191,94 @@ export default function SettingsPage() {
 
       {/* PROFILE TAB */}
       {activeTab === 'profile' && (
-        <div className="settings-card">
-          <h2>Public Profile</h2>
-          <p className="section-desc">Personal details visible across wiki articles and discussions</p>
-
-          <form onSubmit={handleUpdateProfile}>
-            <div className="settings-group">
-              <label>Username</label>
-              <input type="text" disabled value={user?.username || ''} className="settings-input" />
+        <>
+          {/* ACCOUNT STANDING & DEMERIT GAUGE */}
+          <div style={{
+            backgroundColor: '#0d0d0f',
+            border: demerits > 0 ? '1px solid #ef444460' : '1px solid #1f1f23',
+            borderRadius: 8,
+            padding: '1.25rem 1.5rem',
+            marginBottom: '1.75rem',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '1rem'
+          }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                <h3 style={{ margin: 0, fontSize: '1.05rem' }}>Community Standing</h3>
+                <span style={{
+                  fontSize: '0.7rem',
+                  padding: '0.15rem 0.5rem',
+                  borderRadius: 9999,
+                  fontWeight: 600,
+                  backgroundColor: demerits > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                  color: demerits > 0 ? '#ef4444' : '#10b981',
+                  border: `1px solid ${demerits > 0 ? '#ef444440' : '#10b98140'}`
+                }}>
+                  {demerits === 0 ? 'Good Standing' : 'Under Review'}
+                </span>
+              </div>
+              <p style={{ margin: 0, fontSize: '0.85rem', color: '#a1a1aa', maxWidth: 500 }}>
+                {demerits === 0
+                  ? 'Your account has 0 violations. All your contributions adhere to community standards.'
+                  : 'Demerit points are issued when article revisions are flagged and confirmed by moderators. Reaching 5 points results in an automatic, irreversible platform ban.'}
+              </p>
             </div>
 
-            <div className="settings-group">
-              <label>Email Address</label>
-              <input type="email" disabled value={user?.email || ''} className="settings-input" />
+            <div style={{
+              textAlign: 'center',
+              padding: '0.6rem 1.25rem',
+              borderRadius: 6,
+              backgroundColor: demerits > 0 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.1)',
+              border: `1px solid ${demerits > 0 ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`
+            }}>
+              <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', color: '#a1a1aa', display: 'block', fontWeight: 600 }}>
+                Demerit Points
+              </span>
+              <span style={{
+                fontSize: '1.25rem',
+                fontWeight: 700,
+                color: demerits > 0 ? '#ef4444' : '#10b981'
+              }}>
+                {demerits} / 5
+              </span>
             </div>
+          </div>
 
-            <div className="settings-group">
-              <label>Bio</label>
-              <textarea
-                placeholder="Write a brief introduction..."
-                value={bio}
-                maxLength={500}
-                onChange={(e) => setBio(e.target.value)}
-                className="settings-textarea"
-              />
-            </div>
+          <div className="settings-card">
+            <h2>Public Profile</h2>
+            <p className="section-desc">Personal details visible across wiki articles and discussions</p>
 
-            <button type="submit" disabled={saving} className="auth-btn" style={{ width: 'auto' }}>
-              {saving ? 'Saving...' : 'Save Profile'}
-            </button>
-          </form>
-        </div>
+            <form onSubmit={handleUpdateProfile}>
+              <div className="settings-group">
+                <label>Username</label>
+                <input type="text" disabled value={user?.username || ''} className="settings-input" />
+              </div>
+
+              <div className="settings-group">
+                <label>Email Address</label>
+                <input type="email" disabled value={user?.email || ''} className="settings-input" />
+              </div>
+
+              <div className="settings-group">
+                <label>Bio</label>
+                <textarea
+                  placeholder="Write a brief introduction..."
+                  value={bio}
+                  maxLength={500}
+                  onChange={(e) => setBio(e.target.value)}
+                  className="settings-textarea"
+                />
+              </div>
+
+              <button type="submit" disabled={saving} className="auth-btn" style={{ width: 'auto' }}>
+                {saving ? 'Saving...' : 'Save Profile'}
+              </button>
+            </form>
+          </div>
+        </>
       )}
 
       {/* SECURITY TAB */}

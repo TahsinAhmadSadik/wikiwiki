@@ -13,6 +13,7 @@ import studioRoutes from './routes/studio.routes.js';
 import statsRoutes from './routes/stats.routes.js';
 import homeRoutes from './routes/home.routes.js';
 import searchRoutes from './routes/search.routes.js';
+import reportRoutes from './routes/report.routes.js';
 
 dotenv.config();
 const app = express();
@@ -38,6 +39,7 @@ app.use('/api/studio', studioRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/home', homeRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/reports', reportRoutes);
 
 
 app.get('/api/categories', async (req, res) => {

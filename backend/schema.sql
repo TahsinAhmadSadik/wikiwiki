@@ -468,3 +468,213 @@ BEGIN
     LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
+
+
+
+
+
+
+
+
+-- 1. Ensure resolution audit columns exist on reports
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolver_id INT REFERENCES users(user_id);
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE;
+
+-- 2. Ensure demerit_points defaults to 0 on users
+ALTER TABLE users ALTER COLUMN demerit_points SET DEFAULT 0;
+UPDATE users SET demerit_points = 0 WHERE demerit_points IS NULL;
+
+
+
+
+-- 3. Replace the stored procedure with type-safe assignments
+CREATE OR REPLACE PROCEDURE sp_resolve_report_and_penalize(
+    p_report_id INT,
+    p_resolver_id INT,
+    p_action VARCHAR,
+    p_demerit_points INT DEFAULT 0
+)
+AS $$
+DECLARE
+    v_target_user_id INT;
+    v_new_demerits INT;
+BEGIN
+    -- 1. Update report status without rigid enum cast (compatible with VARCHAR and ENUM)
+    UPDATE reports
+    SET status = p_action,
+        resolver_id = p_resolver_id,
+        resolved_at = CURRENT_TIMESTAMP
+    WHERE report_id = p_report_id;
+
+    -- 2. Locate editor of the flagged version
+    SELECT av.editor_id INTO v_target_user_id
+    FROM reports r
+    LEFT JOIN article_versions av ON r.version_id = av.version_id
+    WHERE r.report_id = p_report_id;
+
+    -- Fallback: If reported at article level, find the latest version's author
+    IF v_target_user_id IS NULL THEN
+        SELECT av.editor_id INTO v_target_user_id
+        FROM reports r
+        INNER JOIN article_versions av ON r.article_id = av.article_id
+        WHERE r.report_id = p_report_id
+        ORDER BY av.version_number DESC
+        LIMIT 1;
+    END IF;
+
+    -- 3. Apply demerits if points > 0 and user exists
+    IF p_demerit_points > 0 AND v_target_user_id IS NOT NULL THEN
+        UPDATE users
+        SET demerit_points = COALESCE(demerit_points, 0) + p_demerit_points
+        WHERE user_id = v_target_user_id
+        RETURNING demerit_points INTO v_new_demerits;
+
+        -- Auto-ban policy: demerits >= 5 revokes sessions and bans user
+        IF v_new_demerits >= 5 THEN
+            UPDATE users
+            SET is_banned = TRUE,
+                token_version = token_version + 1
+            WHERE user_id = v_target_user_id;
+        END IF;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+
+
+-- 1. Ensure resolution audit columns exist on reports
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolver_id INT;
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMP WITH TIME ZONE;
+
+-- 2. Convert status column to VARCHAR to eliminate enum casting conflicts
+ALTER TABLE reports ALTER COLUMN status TYPE VARCHAR(50);
+
+-- 3. Ensure users table has demerit_points initialized
+ALTER TABLE users ADD COLUMN IF NOT EXISTS demerit_points INT DEFAULT 0;
+UPDATE users SET demerit_points = 0 WHERE demerit_points IS NULL;
+
+-- 4. Clean up any previous procedure overloads
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize(INT, INT, VARCHAR, INT);
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize(INT, INT, VARCHAR);
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize(INT, INT, TEXT, INT);
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize(INT, INT, TEXT);
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize;
+
+-- 5. Create the procedure matching Prisma's (BIGINT, BIGINT, TEXT, BIGINT) parameter types
+CREATE OR REPLACE PROCEDURE sp_resolve_report_and_penalize(
+    p_report_id BIGINT,
+    p_resolver_id BIGINT,
+    p_action TEXT,
+    p_demerit_points BIGINT DEFAULT 0
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_target_user_id BIGINT;
+    v_new_demerits BIGINT;
+BEGIN
+    -- 1. Update report resolution status and audit details
+    UPDATE reports
+    SET status = p_action,
+        resolver_id = p_resolver_id,
+        resolved_at = CURRENT_TIMESTAMP
+    WHERE report_id = p_report_id;
+
+    -- 2. Locate editor of the flagged version
+    SELECT av.editor_id INTO v_target_user_id
+    FROM reports r
+    LEFT JOIN article_versions av ON r.version_id = av.version_id
+    WHERE r.report_id = p_report_id;
+
+    -- Fallback: If reported at article level, find the latest version's author
+    IF v_target_user_id IS NULL THEN
+        SELECT av.editor_id INTO v_target_user_id
+        FROM reports r
+        INNER JOIN article_versions av ON r.article_id = av.article_id
+        WHERE r.report_id = p_report_id
+        ORDER BY av.version_number DESC
+        LIMIT 1;
+    END IF;
+
+    -- 3. Apply demerits if points > 0 and editor exists
+    IF p_demerit_points > 0 AND v_target_user_id IS NOT NULL THEN
+        UPDATE users
+        SET demerit_points = COALESCE(demerit_points, 0) + p_demerit_points
+        WHERE user_id = v_target_user_id
+        RETURNING demerit_points INTO v_new_demerits;
+
+        -- Auto-ban policy: demerits >= 5 revokes sessions and bans user
+        IF v_new_demerits >= 5 THEN
+            UPDATE users
+            SET is_banned = TRUE,
+                token_version = token_version + 1
+            WHERE user_id = v_target_user_id;
+        END IF;
+    END IF;
+END;
+$$;
+
+
+
+
+
+-- 1. Add demerit_points column to reports
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS demerit_points INT DEFAULT 0;
+
+-- 2. Update procedure to record the demerits on the resolved report
+CREATE OR REPLACE PROCEDURE sp_resolve_report_and_penalize(
+    p_report_id BIGINT,
+    p_resolver_id BIGINT,
+    p_action TEXT,
+    p_demerit_points BIGINT DEFAULT 0
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_target_user_id BIGINT;
+    v_new_demerits BIGINT;
+BEGIN
+    -- 1. Update report resolution status, audit details, and demerits recorded
+    UPDATE reports
+    SET status = p_action,
+        resolver_id = p_resolver_id,
+        resolved_at = CURRENT_TIMESTAMP,
+        demerit_points = p_demerit_points::INT
+    WHERE report_id = p_report_id;
+
+    -- 2. Locate editor of the flagged version
+    SELECT av.editor_id INTO v_target_user_id
+    FROM reports r
+    LEFT JOIN article_versions av ON r.version_id = av.version_id
+    WHERE r.report_id = p_report_id;
+
+    -- Fallback: If reported at article level, find the latest version's author
+    IF v_target_user_id IS NULL THEN
+        SELECT av.editor_id INTO v_target_user_id
+        FROM reports r
+        INNER JOIN article_versions av ON r.article_id = av.article_id
+        WHERE r.report_id = p_report_id
+        ORDER BY av.version_number DESC
+        LIMIT 1;
+    END IF;
+
+    -- 3. Apply demerits if points > 0 and editor exists
+    IF p_demerit_points > 0 AND v_target_user_id IS NOT NULL THEN
+        UPDATE users
+        SET demerit_points = COALESCE(demerit_points, 0) + p_demerit_points
+        WHERE user_id = v_target_user_id
+        RETURNING demerit_points INTO v_new_demerits;
+
+        -- Auto-ban policy: demerits >= 5 revokes sessions and bans user
+        IF v_new_demerits >= 5 THEN
+            UPDATE users
+            SET is_banned = TRUE,
+                token_version = token_version + 1
+            WHERE user_id = v_target_user_id;
+        END IF;
+    END IF;
+END;
+$$;

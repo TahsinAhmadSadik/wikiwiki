@@ -8,7 +8,7 @@ import '../styles/auth.css';
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 function ImageBlockPreview({ url, caption, formatImageUrl }) {
-  const [status, setStatus] = useState('loading'); // 'loading' | 'success' | 'error'
+  const [status, setStatus] = useState('loading');
 
   useEffect(() => {
     setStatus('loading');
@@ -27,7 +27,6 @@ function ImageBlockPreview({ url, caption, formatImageUrl }) {
       border: status === 'error' ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid #1f1f23',
       textAlign: 'center'
     }}>
-      {/* Verification Status Badge */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
         <span style={{ fontSize: '0.72rem', color: '#71717a' }}>Preview & Validation:</span>
         {status === 'loading' && (
@@ -41,7 +40,6 @@ function ImageBlockPreview({ url, caption, formatImageUrl }) {
         )}
       </div>
 
-      {/* Preview Image */}
       <img
         src={fullUrl}
         alt={caption || 'Preview'}
@@ -56,7 +54,6 @@ function ImageBlockPreview({ url, caption, formatImageUrl }) {
         }}
       />
 
-      {/* Fallback Warning if URL fails */}
       {status === 'error' && (
         <div style={{ padding: '1rem', color: '#ef4444', fontSize: '0.8rem' }}>
           Unable to load image from this URL. Make sure it points directly to an image file (ending in .jpg, .png, .webp, or .gif) and allows public cross-origin viewing.
@@ -86,6 +83,10 @@ export default function ArticleEditorPage() {
   const [selectedWikiId, setSelectedWikiId] = useState(queryWikiId || '');
   const [selectedCategoryId, setSelectedCategoryId] = useState('');
 
+  // Existing article slugs (for edit mode redirection)
+  const [currentArticleSlug, setCurrentArticleSlug] = useState('');
+  const [currentWikiSlug, setCurrentWikiSlug] = useState('');
+
   // Wiki Selection Modal states
   const [isWikiModalOpen, setIsWikiModalOpen] = useState(false);
   const [wikiModalSearch, setWikiModalSearch] = useState('');
@@ -97,7 +98,7 @@ export default function ArticleEditorPage() {
   const [editSummary, setEditSummary] = useState('');
   const [templateType, setTemplateType] = useState('standard');
 
-  // Editor content states (Block Editor with Paragraphs, Headers, and Images)
+  // Content blocks
   const [blocks, setBlocks] = useState([
     { id: '1', type: 'paragraph', data: { text: '' } }
   ]);
@@ -140,6 +141,8 @@ export default function ArticleEditorPage() {
           setSelectedWikiId(String(art.wiki_id));
           setSelectedCategoryId(art.category_id ? String(art.category_id) : '');
           setTemplateType(art.template_type || 'standard');
+          setCurrentArticleSlug(art.slug || '');
+          setCurrentWikiSlug(art.wiki_slug || '');
 
           if (artRes.latestVersion?.content?.blocks) {
             setBlocks(artRes.latestVersion.content.blocks);
@@ -228,7 +231,6 @@ export default function ArticleEditorPage() {
     setWikiModalSearch('');
   };
 
-  // Block Helpers
   const handleBlockChange = (id, text) => {
     setBlocks((prev) =>
       prev.map((b) => (b.id === id ? { ...b, data: { ...b.data, text } } : b))
@@ -244,13 +246,10 @@ export default function ArticleEditorPage() {
   };
 
   const getStoredToken = () => {
-    // 1. Check direct token keys
     for (const key of ['token', 'accessToken', 'authToken', 'jwt', 'access_token']) {
       const val = localStorage.getItem(key);
       if (val) return val.replace(/^"|"$/g, '');
     }
-
-    // 2. Check nested user object
     try {
       const rawUser = localStorage.getItem('user');
       if (rawUser) {
@@ -259,8 +258,13 @@ export default function ArticleEditorPage() {
         if (parsed.accessToken) return parsed.accessToken;
       }
     } catch (_) {}
-
     return null;
+  };
+
+  const getUploadEndpoint = () => {
+    const raw = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const clean = raw.replace(/\/+$/, '');
+    return clean.endsWith('/api') ? `${clean}/media/upload` : `${clean}/api/media/upload`;
   };
 
   const handleImageFileUpload = async (blockId, file) => {
@@ -274,10 +278,9 @@ export default function ArticleEditorPage() {
 
     try {
       const uploadUrl = getUploadEndpoint();
-
       const res = await fetch(uploadUrl, {
         method: 'POST',
-        credentials: 'include', // Transmits session cookies cross-origin
+        credentials: 'include',
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
@@ -296,7 +299,6 @@ export default function ArticleEditorPage() {
         throw new Error(data.message || 'File upload failed');
       }
 
-      // Save CDN url and media_id to block data
       setBlocks((prev) =>
         prev.map((b) =>
           b.id === blockId
@@ -352,7 +354,17 @@ export default function ArticleEditorPage() {
           edit_summary: editSummary.trim() || 'Updated content revision'
         });
         setStatusMsg({ text: res.message, type: 'success' });
-        setTimeout(() => navigate('/studio/library'), 1200);
+
+        const targetWikiSlug = res.wiki_slug || currentWikiSlug || selectedWiki?.slug;
+        const targetArtSlug = res.article_slug || currentArticleSlug;
+
+        setTimeout(() => {
+          if (res.canPublishDirectly && targetWikiSlug && targetArtSlug) {
+            navigate(`/wiki/${targetWikiSlug}/${targetArtSlug}`);
+          } else {
+            navigate('/library');
+          }
+        }, 1200);
       } else {
         const res = await api.post('/articles', {
           wiki_id: Number(selectedWikiId),
@@ -364,8 +376,18 @@ export default function ArticleEditorPage() {
         });
 
         setStatusMsg({ text: res.message, type: 'success' });
+
+        const targetWikiSlug = res.article?.wiki_slug || selectedWiki?.slug;
+        const targetArtSlug = res.article?.slug;
+
         setTimeout(() => {
-          navigate(`/wiki/${selectedWiki?.slug || res.article.slug || selectedWikiId}`);
+          if (res.canPublishDirectly && targetWikiSlug && targetArtSlug) {
+            navigate(`/wiki/${targetWikiSlug}/${targetArtSlug}`);
+          } else if (targetWikiSlug) {
+            navigate(`/wiki/${targetWikiSlug}`);
+          } else {
+            navigate('/library');
+          }
         }, 1200);
       }
     } catch (err) {
@@ -378,12 +400,6 @@ export default function ArticleEditorPage() {
   if (loading) {
     return <div style={{ color: '#71717a', padding: '2rem' }}>Loading editor workbench...</div>;
   }
-
-  const getUploadEndpoint = () => {
-    const raw = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-    const clean = raw.replace(/\/+$/, '');
-    return clean.endsWith('/api') ? `${clean}/media/upload` : `${clean}/api/media/upload`;
-  };
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
@@ -577,7 +593,7 @@ export default function ArticleEditorPage() {
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <Link
-              to="/studio/library"
+              to="/library"
               style={{
                 backgroundColor: 'transparent',
                 border: '1px solid #27272a',
@@ -795,7 +811,7 @@ export default function ArticleEditorPage() {
                 </div>
               )}
 
-              {/* 3. Image Media Block with Live URL Preview Validation */}
+              {/* 3. Image Media Block */}
               {b.type === 'image' && (
                 <div style={{
                   flex: 1,
@@ -847,7 +863,6 @@ export default function ArticleEditorPage() {
                     style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
                   />
 
-                  {/* Live URL / Upload Preview with Validation */}
                   <ImageBlockPreview
                     url={b.data?.url}
                     caption={b.data?.caption}
@@ -856,7 +871,6 @@ export default function ArticleEditorPage() {
                 </div>
               )}
 
-              {/* Remove block button */}
               <button
                 type="button"
                 onClick={() => handleRemoveBlock(b.id)}
@@ -875,7 +889,6 @@ export default function ArticleEditorPage() {
             </div>
           ))}
 
-          {/* ADD BLOCK ACTION BAR */}
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
             <button
               type="button"

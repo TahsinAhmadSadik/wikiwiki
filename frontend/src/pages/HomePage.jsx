@@ -15,7 +15,7 @@ export default function HomePage() {
   const [forYouArticles, setForYouArticles] = useState([]);
 
   // Analytical Explorer State (Stats 1, 2, and 3)
-  const [statTab, setStatTab] = useState('top-reads'); // 'top-reads' | 'topic-time' | 'cross-topic'
+  const [statTab, setStatTab] = useState('top-reads');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [timeDays, setTimeDays] = useState(30);
   const [topicArticles, setTopicArticles] = useState([]);
@@ -60,7 +60,6 @@ export default function HomePage() {
     fetchLandingData();
   }, [user]);
 
-  // Fetch Topic Performance (Stat 2) when category or days change
   useEffect(() => {
     if (statTab === 'topic-time' && selectedCategory) {
       api.get(`/stats/topic-performance?category_id=${selectedCategory}&days=${timeDays}&limit=6`)
@@ -69,7 +68,6 @@ export default function HomePage() {
     }
   }, [statTab, selectedCategory, timeDays]);
 
-  // Fetch Cross Topic Leaderboard (Stat 3) when days toggle changes
   useEffect(() => {
     if (statTab === 'cross-topic') {
       api.get(`/stats/cross-topic-leaderboard?days=${timeDays}&rank_limit=2`)
@@ -143,7 +141,7 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* 2. STAT 4: TRENDING WIKI SPACES (VELOCITY) */}
+        {/* 2. STAT 4: TRENDING WIKI SPACES (WITH COVERS) */}
         <section style={{ marginBottom: '3rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem' }}>
             <div>
@@ -152,33 +150,60 @@ export default function HomePage() {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '1rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1rem' }}>
             {velocityWikis.map((wiki) => (
               <div key={wiki.wiki_id} style={{
                 backgroundColor: '#0d0d0f',
                 border: '1px solid #1f1f23',
-                borderRadius: 6,
-                padding: '1.25rem',
+                borderRadius: 8,
+                overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between'
               }}>
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
-                      <Link to={`/wiki/${wiki.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
-                        {wiki.title}
-                      </Link>
-                    </h3>
-                    <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
-                      ⚡ {wiki.velocity_score}
-                    </span>
+                  {/* Wiki Card Cover */}
+                  <div style={{
+                    height: 100,
+                    width: '100%',
+                    backgroundColor: '#141417',
+                    backgroundImage: wiki.cover_image_url ? `url(${wiki.cover_image_url})` : 'none',
+                    backgroundSize: 'cover',
+                    backgroundPosition: 'center',
+                    borderBottom: '1px solid #1f1f23',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    {!wiki.cover_image_url && <span style={{ color: '#3f3f46', fontSize: '1.75rem' }}>📚</span>}
                   </div>
-                  <p style={{ color: '#71717a', fontSize: '0.825rem', margin: '0.5rem 0 1rem 0' }}>
-                    {wiki.description || 'No description available'}
-                  </p>
+
+                  <div style={{ padding: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.05rem' }}>
+                        <Link to={`/wiki/${wiki.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                          {wiki.title}
+                        </Link>
+                      </h3>
+                      <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
+                        ⚡ {wiki.velocity_score}
+                      </span>
+                    </div>
+                    <p style={{
+                      color: '#71717a',
+                      fontSize: '0.825rem',
+                      margin: '0.25rem 0 0.75rem 0',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: 'vertical',
+                      overflow: 'hidden'
+                    }}>
+                      {wiki.description || 'No description available'}
+                    </p>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#a1a1aa', borderTop: '1px solid #1f1f23', paddingTop: '0.75rem' }}>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#a1a1aa', borderTop: '1px solid #1f1f23', padding: '0.75rem 1rem' }}>
                   <span>{wiki.total_articles} Articles</span>
                   <span>{wiki.total_views} Reads</span>
                 </div>
@@ -187,7 +212,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* 3. TEACHER'S STATS HUB (Stats 1, 2, and 3) */}
+        {/* 3. TEACHER'S STATS HUB */}
         <section id="stats-section" style={{
           backgroundColor: '#0d0d0f',
           border: '1px solid #1f1f23',
@@ -201,7 +226,6 @@ export default function HomePage() {
               <span style={{ fontSize: '0.8rem', color: '#71717a' }}>Database functions & window queries</span>
             </div>
 
-            {/* Metric Switcher Tabs */}
             <div style={{ display: 'flex', backgroundColor: '#141417', borderRadius: 6, padding: '0.2rem', border: '1px solid #27272a' }}>
               <button
                 type="button"
@@ -251,29 +275,39 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* STAT 1: ALL TIME TOP READS */}
+          {/* STAT 1: TOP READS */}
           {statTab === 'top-reads' && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
               {topReads.map((art, idx) => (
-                <div key={art.article_id} style={{ backgroundColor: '#141417', border: '1px solid #27272a', padding: '1rem', borderRadius: 6 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '0.75rem', color: '#a855f7', fontWeight: 600 }}>#{idx + 1} Most Read</span>
-                    <span style={{ fontSize: '0.75rem', color: '#71717a' }}>{art.read_count} views</span>
+                <div key={art.article_id} style={{ backgroundColor: '#141417', border: '1px solid #27272a', padding: '1rem', borderRadius: 6, display: 'flex', gap: '0.85rem', alignItems: 'center' }}>
+                  {art.thumbnail_url && (
+                    <img
+                      src={art.thumbnail_url}
+                      alt={art.title}
+                      style={{ width: 55, height: 55, borderRadius: 6, objectFit: 'cover', flexShrink: 0, backgroundColor: '#09090b' }}
+                      onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                    />
+                  )}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#a855f7', fontWeight: 600 }}>#{idx + 1} Most Read</span>
+                      <span style={{ fontSize: '0.75rem', color: '#71717a' }}>{art.read_count} views</span>
+                    </div>
+                    <h4 style={{ margin: '0.25rem 0', fontSize: '1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                        {art.title}
+                      </Link>
+                    </h4>
+                    <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                      {art.wiki_title} • {art.category_name || 'General'}
+                    </span>
                   </div>
-                  <h4 style={{ margin: '0.35rem 0', fontSize: '1.05rem' }}>
-                    <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
-                      {art.title}
-                    </Link>
-                  </h4>
-                  <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                    {art.wiki_title} • {art.category_name || 'General'}
-                  </span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* STAT 2: TOPIC OVER TIME (USES UDF) */}
+          {/* STAT 2: TOPIC OVER TIME */}
           {statTab === 'topic-time' && (
             <div>
               <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
@@ -337,7 +371,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* STAT 3: CROSS TOPIC LEADERBOARD (WINDOW FUNCTION) */}
+          {/* STAT 3: CROSS TOPIC LEADERBOARD */}
           {statTab === 'cross-topic' && (
             <div>
               <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', alignItems: 'center' }}>
@@ -392,7 +426,7 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* 4. "FOR YOU" FEED */}
+        {/* 4. "FOR YOU" FEED (WITH ARTICLE THUMBNAILS) */}
         <section style={{ marginBottom: '3rem' }}>
           <h2 style={{ fontSize: '1.35rem', margin: '0 0 1rem 0' }}>For You: Recommended Articles</h2>
 
@@ -456,7 +490,6 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* FOR YOU ARTICLES FEED */}
           {!user ? (
             <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '2rem', borderRadius: 6, textAlign: 'center' }}>
               <p style={{ color: '#a1a1aa', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>
@@ -480,14 +513,39 @@ export default function HomePage() {
                   style={{
                     backgroundColor: '#0d0d0f',
                     border: '1px solid #1f1f23',
-                    padding: '1.25rem',
-                    borderRadius: 6,
+                    padding: '1.15rem 1.25rem',
+                    borderRadius: 8,
                     display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
+                    alignItems: 'center',
+                    gap: '1.25rem'
                   }}
                 >
-                  <div style={{ flex: 1, marginRight: '1.25rem' }}>
+                  {/* Article Thumbnail Preview */}
+                  <div style={{
+                    width: 80,
+                    height: 80,
+                    borderRadius: 6,
+                    backgroundColor: '#141417',
+                    border: '1px solid #27272a',
+                    flexShrink: 0,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    {art.thumbnail_url ? (
+                      <img
+                        src={art.thumbnail_url}
+                        alt={art.title}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                      />
+                    ) : (
+                      <span style={{ fontSize: '1.6rem', color: '#3f3f46' }}>📄</span>
+                    )}
+                  </div>
+
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <span style={{ fontSize: '0.75rem', color: '#a855f7' }}>
                       {art.category_name} •{' '}
                       <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'underline' }}>
@@ -500,7 +558,6 @@ export default function HomePage() {
                       </Link>
                     </h3>
 
-                    {/* 2-line Ellipsis Snippet */}
                     <p
                       style={{
                         margin: '0.25rem 0 0 0',

@@ -54,7 +54,7 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const wikiInfo = await prisma.$queryRaw`
-      SELECT category_id::INT AS category_id 
+      SELECT category_id::INT AS category_id, slug 
       FROM wiki_spaces 
       WHERE wiki_id = ${Number(wiki_id)} 
       LIMIT 1;
@@ -62,6 +62,7 @@ router.post('/', authenticateToken, async (req, res) => {
     const resolvedCategoryId = category_id 
       ? Number(category_id) 
       : (wikiInfo[0]?.category_id ? Number(wikiInfo[0].category_id) : null);
+    const wikiSlug = wikiInfo[0]?.slug || null;
 
     const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
     const membership = await prisma.$queryRaw`
@@ -132,10 +133,14 @@ router.post('/', authenticateToken, async (req, res) => {
 
     res.status(201).json({
       success: true,
+      canPublishDirectly,
       message: canPublishDirectly 
         ? 'Article published successfully!' 
         : 'Article draft submitted! It is awaiting review from wiki authors.',
-      article: result
+      article: {
+        ...result,
+        wiki_slug: wikiSlug
+      }
     });
   } catch (error) {
     console.error('Create article error:', error);
@@ -220,8 +225,16 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
     }
 
     const articles = await prisma.$queryRaw`
-      SELECT article_id::INT AS article_id, wiki_id::INT AS wiki_id, is_locked
-      FROM articles WHERE article_id = ${articleId} LIMIT 1;
+      SELECT 
+        a.article_id::INT AS article_id, 
+        a.wiki_id::INT AS wiki_id, 
+        a.slug AS article_slug, 
+        a.is_locked,
+        w.slug AS wiki_slug
+      FROM articles a
+      INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+      WHERE a.article_id = ${articleId} 
+      LIMIT 1;
     `;
     if (articles.length === 0) {
       return res.status(404).json({ success: false, message: 'Article not found' });
@@ -291,6 +304,9 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
 
     res.status(201).json({
       success: true,
+      canPublishDirectly,
+      wiki_slug: article.wiki_slug,
+      article_slug: article.article_slug,
       message: canPublishDirectly
         ? `Version ${nextVersion} published successfully.`
         : `Version ${nextVersion} submitted for review.`

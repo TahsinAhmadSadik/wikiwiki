@@ -10,7 +10,7 @@ export default function SearchPage() {
   const initialQuery = searchParams.get('q') || '';
 
   const [q, setQ] = useState(initialQuery);
-  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'articles' | 'wikis'
+  const [activeTab, setActiveTab] = useState('all');
   const [sort, setSort] = useState('relevance');
   const [selectedCategory, setSelectedCategory] = useState('');
 
@@ -27,14 +27,12 @@ export default function SearchPage() {
   const [categoryTree, setCategoryTree] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Load category tree once
   useEffect(() => {
     api.get('/search/categories/tree')
       .then((res) => setCategoryTree(res.tree || []))
       .catch((err) => console.error(err));
   }, []);
 
-  // Trigger search on filter changes
   const executeSearch = async () => {
     setLoading(true);
     try {
@@ -112,7 +110,6 @@ export default function SearchPage() {
             </button>
           </div>
 
-          {/* ADVANCED BOOLEAN ACCORDION */}
           {showAdvanced && (
             <div style={{
               backgroundColor: '#0d0d0f',
@@ -181,8 +178,6 @@ export default function SearchPage() {
 
         {/* MAIN LAYOUT: SIDEBAR & RESULTS */}
         <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: '1.5rem', alignItems: 'flex-start' }}>
-          
-          {/* LEFT SIDEBAR: CATEGORY TREE */}
           <aside>
             <CategoryTreeExplorer
               tree={categoryTree}
@@ -191,9 +186,7 @@ export default function SearchPage() {
             />
           </aside>
 
-          {/* RIGHT COLUMN: RESULTS */}
           <section>
-            {/* FILTER & SORT BAR */}
             <div style={{
               display: 'flex',
               justifyContent: 'space-between',
@@ -202,7 +195,6 @@ export default function SearchPage() {
               paddingBottom: '0.75rem',
               marginBottom: '1.25rem'
             }}>
-              {/* Type Tabs */}
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 {['all', 'articles', 'wikis'].map((tab) => (
                   <button
@@ -226,7 +218,6 @@ export default function SearchPage() {
                 ))}
               </div>
 
-              {/* Sort Dropdown */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span style={{ fontSize: '0.8rem', color: '#71717a' }}>Sort:</span>
                 <select
@@ -247,8 +238,7 @@ export default function SearchPage() {
               <p style={{ color: '#71717a' }}>Searching indexes...</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                
-                {/* WIKIS SECTION */}
+                {/* WIKIS SECTION (WITH COVERS) */}
                 {['all', 'wikis'].includes(activeTab) && wikis.length > 0 && (
                   <div style={{ marginBottom: '1rem' }}>
                     <h3 style={{ fontSize: '0.85rem', color: '#a855f7', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
@@ -256,26 +246,62 @@ export default function SearchPage() {
                     </h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
                       {wikis.map((w) => (
-                        <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1rem', borderRadius: 6 }}>
-                          <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>
-                            <Link 
-                              to={`/wiki/${w.slug}`} 
-                              style={{ color: '#fff', textDecoration: 'none' }}
-                            >
-                              {w.title}
-                            </Link>
-                          </h4>
-                          <p style={{ margin: '0 0 0.5rem 0', color: '#71717a', fontSize: '0.8rem' }}>{w.description}</p>
-                          <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                        <div key={w.wiki_id} style={{
+                          backgroundColor: '#0d0d0f',
+                          border: '1px solid #1f1f23',
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between'
+                        }}>
+                          <div>
+                            {/* Wiki Card Cover */}
+                            <div style={{
+                              height: 90,
+                              width: '100%',
+                              backgroundColor: '#141417',
+                              backgroundImage: w.cover_image_url ? `url(${w.cover_image_url})` : 'none',
+                              backgroundSize: 'cover',
+                              backgroundPosition: 'center',
+                              borderBottom: '1px solid #1f1f23',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}>
+                              {!w.cover_image_url && <span style={{ color: '#3f3f46', fontSize: '1.5rem' }}>📚</span>}
+                            </div>
+
+                            <div style={{ padding: '0.9rem' }}>
+                              <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>
+                                <Link to={`/wiki/${w.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                                  {w.title}
+                                </Link>
+                              </h4>
+                              <p style={{
+                                margin: '0 0 0.5rem 0',
+                                color: '#71717a',
+                                fontSize: '0.8rem',
+                                display: '-webkit-box',
+                                WebkitLineClamp: 2,
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden'
+                              }}>
+                                {w.description}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div style={{ padding: '0.75rem 0.9rem', borderTop: '1px solid #1f1f23', fontSize: '0.75rem', color: '#a1a1aa' }}>
                             {w.article_count} articles • {w.total_views} views
-                          </span>
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* ARTICLES SECTION */}
+                {/* ARTICLES SECTION (WITH THUMBNAILS) */}
                 {['all', 'articles'].includes(activeTab) && (
                   <div>
                     {activeTab === 'all' && (
@@ -294,18 +320,40 @@ export default function SearchPage() {
                           <div key={art.article_id} style={{
                             backgroundColor: '#0d0d0f',
                             border: '1px solid #1f1f23',
-                            borderRadius: 6,
-                            padding: '1.25rem',
+                            borderRadius: 8,
+                            padding: '1.15rem 1.25rem',
                             display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
+                            alignItems: 'center',
+                            gap: '1.25rem'
                           }}>
-                            <div style={{ flex: 1, marginRight: '1.25rem' }}>
+                            {/* Article Card Thumbnail */}
+                            <div style={{
+                              width: 80,
+                              height: 80,
+                              borderRadius: 6,
+                              backgroundColor: '#141417',
+                              border: '1px solid #27272a',
+                              flexShrink: 0,
+                              overflow: 'hidden',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center'
+                            }}>
+                              {art.thumbnail_url ? (
+                                <img
+                                  src={art.thumbnail_url}
+                                  alt={art.title}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                />
+                              ) : (
+                                <span style={{ fontSize: '1.6rem', color: '#3f3f46' }}>📄</span>
+                              )}
+                            </div>
+
+                            <div style={{ flex: 1, minWidth: 0 }}>
                               <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                                <Link 
-                                  to={`/wiki/${art.wiki_slug}`} 
-                                  style={{ color: '#a855f7', textDecoration: 'none' }}
-                                >
+                                <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
                                   {art.wiki_title}
                                 </Link>{' '}
                                 • {art.category_name || 'General'}
@@ -316,7 +364,6 @@ export default function SearchPage() {
                                 </Link>
                               </h3>
 
-                              {/* Highlighted Snippet via dangerouslySetInnerHTML */}
                               <p
                                 style={{
                                   margin: '0 0 0.4rem 0',
@@ -360,7 +407,6 @@ export default function SearchPage() {
                     )}
                   </div>
                 )}
-
               </div>
             )}
           </section>

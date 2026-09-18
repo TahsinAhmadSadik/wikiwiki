@@ -15,6 +15,7 @@ router.get('/library', authenticateToken, async (req, res) => {
         a.title,
         a.slug,
         COALESCE(a.description, '') AS description,
+        a.thumbnail_url,
         a.read_count::INT AS read_count,
         a.created_at,
         w.title AS wiki_title,
@@ -42,6 +43,7 @@ router.get('/library', authenticateToken, async (req, res) => {
         a.article_id::INT AS article_id,
         a.title AS article_title,
         a.slug AS article_slug,
+        a.thumbnail_url,
         w.title AS wiki_title,
         w.slug AS wiki_slug
       FROM article_versions av

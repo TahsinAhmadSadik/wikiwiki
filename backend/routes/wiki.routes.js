@@ -5,7 +5,7 @@ import { authorizeWikiAccess } from '../middleware/wikiAuth.js';
 
 const router = express.Router();
 
-// 1. GET DIRECTORY OF ALL WIKIS (FOR ARTICLE CREATION & DIRECTORY SEARCH)
+// 1. GET DIRECTORY OF ALL WIKIS (Includes cover_image_url for Wiki Cards)
 router.get('/directory', async (req, res) => {
   try {
     const wikis = await prisma.$queryRaw`
@@ -14,11 +14,14 @@ router.get('/directory', async (req, res) => {
         w.title,
         w.slug,
         w.description,
+        w.category_id::INT AS category_id,
+        COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
         w.total_views::INT AS total_views,
         c.name AS category_name,
         (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
       FROM wiki_spaces w
       LEFT JOIN categories c ON w.category_id = c.category_id
+      LEFT JOIN media m ON w.media_id = m.media_id
       ORDER BY w.title ASC;
     `;
     res.status(200).json({ success: true, wikis });
@@ -28,7 +31,7 @@ router.get('/directory', async (req, res) => {
   }
 });
 
-// 2. GET ALL WIKIS THE CURRENT USER MANAGES (Author, Co-author, or All if Global Admin/Owner)
+// 2. GET ALL WIKIS MANAGED BY CURRENT USER
 router.get('/managed', authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.user_id);
@@ -42,12 +45,14 @@ router.get('/managed', authenticateToken, async (req, res) => {
           w.title,
           w.slug,
           w.description,
+          COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
           w.total_views::INT AS total_views,
           w.created_at,
           'admin' AS user_role,
           (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id) AS article_count,
           (SELECT COUNT(*)::INT FROM user_wiki_follows f WHERE f.wiki_id = w.wiki_id) AS follower_count
         FROM wiki_spaces w
+        LEFT JOIN media m ON w.media_id = m.media_id
         ORDER BY w.created_at DESC;
       `;
     } else {
@@ -57,6 +62,7 @@ router.get('/managed', authenticateToken, async (req, res) => {
           w.title,
           w.slug,
           w.description,
+          COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
           w.total_views::INT AS total_views,
           w.created_at,
           wm.role AS user_role,
@@ -64,6 +70,7 @@ router.get('/managed', authenticateToken, async (req, res) => {
           (SELECT COUNT(*)::INT FROM user_wiki_follows f WHERE f.wiki_id = w.wiki_id) AS follower_count
         FROM wiki_spaces w
         INNER JOIN wiki_memberships wm ON w.wiki_id = wm.wiki_id
+        LEFT JOIN media m ON w.media_id = m.media_id
         WHERE wm.user_id = ${userId}
         ORDER BY w.created_at DESC;
       `;
@@ -76,10 +83,10 @@ router.get('/managed', authenticateToken, async (req, res) => {
   }
 });
 
-// 3. CREATE WIKI
+// 3. CREATE WIKI SPACE (Accepts optional cover_image_url and media_id)
 router.post('/', authenticateToken, async (req, res) => {
   try {
-    const { title, description, category_id } = req.body;
+    const { title, description, category_id, cover_image_url, media_id } = req.body;
     const userId = Number(req.user.user_id);
 
     if (!title || !title.trim()) {
@@ -97,8 +104,24 @@ router.post('/', authenticateToken, async (req, res) => {
 
     const newWiki = await prisma.$transaction(async (tx) => {
       const created = await tx.$queryRaw`
-        INSERT INTO wiki_spaces (title, slug, description, creator_id, category_id)
-        VALUES (${title.trim()}, ${slug}, ${description || null}, ${userId}, ${category_id ? Number(category_id) : null})
+        INSERT INTO wiki_spaces (
+          title,
+          slug,
+          description,
+          creator_id,
+          category_id,
+          cover_image_url,
+          media_id
+        )
+        VALUES (
+          ${title.trim()},
+          ${slug},
+          ${description || null},
+          ${userId},
+          ${category_id ? Number(category_id) : null},
+          ${cover_image_url || null},
+          ${media_id ? Number(media_id) : null}
+        )
         RETURNING wiki_id::INT AS wiki_id, title, slug;
       `;
 
@@ -123,7 +146,247 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// 4. ASSIGN CO-AUTHOR BY EMAIL
+// 4. UPDATE WIKI COVER IMAGE
+// UPDATE OR REMOVE WIKI COVER IMAGE
+router.patch('/:wikiId/cover', authenticateToken, async (req, res) => {
+  try {
+    const wikiId = Number(req.params.wikiId);
+    const { cover_image_url, media_id } = req.body;
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    const wikis = await prisma.$queryRaw`
+      SELECT creator_id::INT AS creator_id FROM wiki_spaces WHERE wiki_id = ${wikiId} LIMIT 1;
+    `;
+    if (wikis.length === 0) {
+      return res.status(404).json({ success: false, message: 'Wiki space not found' });
+    }
+
+    const isCreator = wikis[0].creator_id === userId;
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${wikiId} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && !isCreator && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: Only wiki authors, co-authors, or platform admins can update this cover.'
+      });
+    }
+
+    await prisma.$executeRaw`
+      UPDATE wiki_spaces
+      SET cover_image_url = ${cover_image_url || null},
+          media_id = ${media_id ? Number(media_id) : null}
+      WHERE wiki_id = ${wikiId};
+    `;
+
+    res.status(200).json({
+      success: true,
+      cover_image_url: cover_image_url || null,
+      message: cover_image_url ? 'Wiki cover image updated.' : 'Wiki cover image removed.'
+    });
+  } catch (error) {
+    console.error('Update wiki cover error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update wiki cover' });
+  }
+});
+
+// 5. GET WIKI DETAILS BY SLUG
+router.get('/public/:slug', optionalAuth, async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const userId = req.user?.user_id ? Number(req.user.user_id) : null;
+
+    const wikis = await prisma.$queryRaw`
+      SELECT 
+        w.wiki_id::INT AS wiki_id,
+        w.title,
+        w.slug,
+        w.description,
+        COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
+        w.total_views::INT AS total_views,
+        w.category_id::INT AS category_id,
+        w.creator_id::INT AS creator_id,
+        w.created_at,
+        c.name AS category_name,
+        (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count,
+        (SELECT COUNT(*)::INT FROM user_wiki_follows uwf WHERE uwf.wiki_id = w.wiki_id) AS follower_count,
+        (SELECT COUNT(*)::INT FROM wiki_memberships wm WHERE wm.wiki_id = w.wiki_id) AS author_count
+      FROM wiki_spaces w
+      LEFT JOIN categories c ON w.category_id = c.category_id
+      LEFT JOIN media m ON w.media_id = m.media_id
+      WHERE w.slug = ${slug}
+      LIMIT 1;
+    `;
+
+    if (wikis.length === 0) {
+      return res.status(404).json({ success: false, message: 'Wiki space not found' });
+    }
+
+    const wiki = wikis[0];
+
+    let userRole = null;
+    let isFollowingWiki = false;
+    let isFollowingCategory = false;
+
+    if (userId) {
+      const membership = await prisma.$queryRaw`
+        SELECT role FROM wiki_memberships WHERE wiki_id = ${wiki.wiki_id} AND user_id = ${userId} LIMIT 1;
+      `;
+      if (membership.length > 0) userRole = membership[0].role;
+
+      const wikiFollow = await prisma.$queryRaw`
+        SELECT user_id FROM user_wiki_follows WHERE wiki_id = ${wiki.wiki_id} AND user_id = ${userId} LIMIT 1;
+      `;
+      isFollowingWiki = wikiFollow.length > 0;
+
+      if (wiki.category_id) {
+        const catFollow = await prisma.$queryRaw`
+          SELECT user_id FROM user_category_follows WHERE category_id = ${wiki.category_id} AND user_id = ${userId} LIMIT 1;
+        `;
+        isFollowingCategory = catFollow.length > 0;
+      }
+    }
+
+    // Includes thumbnail_url for article cards
+    const articles = await prisma.$queryRaw`
+      SELECT 
+        a.article_id::INT AS article_id,
+        a.title,
+        a.slug,
+        COALESCE(a.description, '') AS description,
+        a.thumbnail_url,
+        a.read_count::INT AS read_count,
+        a.created_at,
+        (
+          SELECT COALESCE(MAX(av.version_number), 1)::INT 
+          FROM article_versions av 
+          WHERE av.article_id = a.article_id AND av.is_published = TRUE
+        ) AS published_version
+      FROM articles a
+      WHERE a.wiki_id = ${wiki.wiki_id} AND a.is_published = TRUE
+      ORDER BY a.read_count DESC, a.created_at DESC;
+    `;
+
+    let similarWikis = [];
+    if (wiki.category_id) {
+      similarWikis = await prisma.$queryRaw`
+        SELECT 
+          w.wiki_id::INT AS wiki_id,
+          w.title,
+          w.slug,
+          w.description,
+          COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
+          w.total_views::INT AS total_views,
+          (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
+        FROM wiki_spaces w
+        LEFT JOIN media m ON w.media_id = m.media_id
+        WHERE w.category_id = ${wiki.category_id} AND w.wiki_id <> ${wiki.wiki_id}
+        ORDER BY w.total_views DESC
+        LIMIT 4;
+      `;
+    }
+
+    res.status(200).json({
+      success: true,
+      wiki: {
+        ...wiki,
+        userRole,
+        isFollowingWiki,
+        isFollowingCategory
+      },
+      articles,
+      similarWikis
+    });
+  } catch (error) {
+    console.error('Fetch wiki hub error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load wiki space' });
+  }
+});
+
+// 6. DELETE WIKI SPACE
+router.delete('/:wikiId', authenticateToken, async (req, res) => {
+  try {
+    const wikiId = Number(req.params.wikiId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    const wikis = await prisma.$queryRaw`
+      SELECT wiki_id::INT AS wiki_id, title, creator_id::INT AS creator_id
+      FROM wiki_spaces
+      WHERE wiki_id = ${wikiId}
+      LIMIT 1;
+    `;
+
+    if (wikis.length === 0) {
+      return res.status(404).json({ success: false, message: 'Wiki space not found' });
+    }
+
+    const wiki = wikis[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships
+      WHERE wiki_id = ${wikiId} AND user_id = ${userId} AND role = 'author'::wiki_role_enum
+      LIMIT 1;
+    `;
+
+    const isPrimaryAuthor = membership.length > 0 || wiki.creator_id === userId;
+
+    if (!isGlobal && !isPrimaryAuthor) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: Only the primary author or a global administrator can delete this wiki space.'
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.$executeRaw`
+        DELETE FROM article_media
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM reading_list_items
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM reports
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM article_versions
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM articles
+        WHERE wiki_id = ${wikiId};
+      `,
+      prisma.$executeRaw`
+        DELETE FROM user_wiki_follows
+        WHERE wiki_id = ${wikiId};
+      `,
+      prisma.$executeRaw`
+        DELETE FROM wiki_memberships
+        WHERE wiki_id = ${wikiId};
+      `,
+      prisma.$executeRaw`
+        DELETE FROM wiki_spaces
+        WHERE wiki_id = ${wikiId};
+      `
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: `Wiki space "${wiki.title}" and all nested articles have been permanently deleted.`
+    });
+  } catch (error) {
+    console.error('Delete wiki error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete wiki space' });
+  }
+});
+
+// 7. ASSIGN CO-AUTHOR
 router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author'), async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -166,7 +429,7 @@ router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author')
   }
 });
 
-// 5. GET WIKI MEMBERS LIST
+// 8. GET WIKI MEMBERS
 router.get('/:wikiId/members', authenticateToken, authorizeWikiAccess('co_author'), async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -190,190 +453,7 @@ router.get('/:wikiId/members', authenticateToken, authorizeWikiAccess('co_author
   }
 });
 
-// 6. GET WIKI DETAILS BY SLUG WITH STATS, ARTICLES & SIMILAR WIKIS
-router.get('/public/:slug', optionalAuth, async (req, res) => {
-  try {
-    const { slug } = req.params;
-    const userId = req.user?.user_id ? Number(req.user.user_id) : null;
-
-    const wikis = await prisma.$queryRaw`
-      SELECT 
-        w.wiki_id::INT AS wiki_id,
-        w.title,
-        w.slug,
-        w.description,
-        w.total_views::INT AS total_views,
-        w.category_id::INT AS category_id,
-        w.creator_id::INT AS creator_id,
-        w.created_at,
-        c.name AS category_name,
-        (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count,
-        (SELECT COUNT(*)::INT FROM user_wiki_follows uwf WHERE uwf.wiki_id = w.wiki_id) AS follower_count,
-        (SELECT COUNT(*)::INT FROM wiki_memberships wm WHERE wm.wiki_id = w.wiki_id) AS author_count
-      FROM wiki_spaces w
-      LEFT JOIN categories c ON w.category_id = c.category_id
-      WHERE w.slug = ${slug}
-      LIMIT 1;
-    `;
-
-    if (wikis.length === 0) {
-      return res.status(404).json({ success: false, message: 'Wiki space not found' });
-    }
-
-    const wiki = wikis[0];
-
-    let userRole = null;
-    let isFollowingWiki = false;
-    let isFollowingCategory = false;
-
-    if (userId) {
-      const membership = await prisma.$queryRaw`
-        SELECT role FROM wiki_memberships WHERE wiki_id = ${wiki.wiki_id} AND user_id = ${userId} LIMIT 1;
-      `;
-      if (membership.length > 0) userRole = membership[0].role;
-
-      const wikiFollow = await prisma.$queryRaw`
-        SELECT user_id FROM user_wiki_follows WHERE wiki_id = ${wiki.wiki_id} AND user_id = ${userId} LIMIT 1;
-      `;
-      isFollowingWiki = wikiFollow.length > 0;
-
-      if (wiki.category_id) {
-        const catFollow = await prisma.$queryRaw`
-          SELECT user_id FROM user_category_follows WHERE category_id = ${wiki.category_id} AND user_id = ${userId} LIMIT 1;
-        `;
-        isFollowingCategory = catFollow.length > 0;
-      }
-    }
-
-    const articles = await prisma.$queryRaw`
-      SELECT 
-        a.article_id::INT AS article_id,
-        a.title,
-        a.slug,
-        COALESCE(a.description, '') AS description,
-        a.read_count::INT AS read_count,
-        a.created_at,
-        (
-          SELECT COALESCE(MAX(av.version_number), 1)::INT 
-          FROM article_versions av 
-          WHERE av.article_id = a.article_id AND av.is_published = TRUE
-        ) AS published_version
-      FROM articles a
-      WHERE a.wiki_id = ${wiki.wiki_id} AND a.is_published = TRUE
-      ORDER BY a.read_count DESC, a.created_at DESC;
-    `;
-
-    let similarWikis = [];
-    if (wiki.category_id) {
-      similarWikis = await prisma.$queryRaw`
-        SELECT 
-          w.wiki_id::INT AS wiki_id,
-          w.title,
-          w.slug,
-          w.description,
-          w.total_views::INT AS total_views,
-          (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
-        FROM wiki_spaces w
-        WHERE w.category_id = ${wiki.category_id} AND w.wiki_id <> ${wiki.wiki_id}
-        ORDER BY w.total_views DESC
-        LIMIT 4;
-      `;
-    }
-
-    res.status(200).json({
-      success: true,
-      wiki: {
-        ...wiki,
-        userRole,
-        isFollowingWiki,
-        isFollowingCategory
-      },
-      articles,
-      similarWikis
-    });
-  } catch (error) {
-    console.error('Fetch wiki hub error:', error);
-    res.status(500).json({ success: false, message: 'Failed to load wiki space' });
-  }
-});
-
-// 7. DELETE WIKI SPACE (Cascading cleanup - Primary Author & Global Admins only)
-router.delete('/:wikiId', authenticateToken, async (req, res) => {
-  try {
-    const wikiId = Number(req.params.wikiId);
-    const userId = Number(req.user.user_id);
-    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
-
-    const wikis = await prisma.$queryRaw`
-      SELECT wiki_id::INT AS wiki_id, title, creator_id::INT AS creator_id
-      FROM wiki_spaces
-      WHERE wiki_id = ${wikiId}
-      LIMIT 1;
-    `;
-
-    if (wikis.length === 0) {
-      return res.status(404).json({ success: false, message: 'Wiki space not found' });
-    }
-
-    const wiki = wikis[0];
-
-    const membership = await prisma.$queryRaw`
-      SELECT role FROM wiki_memberships
-      WHERE wiki_id = ${wikiId} AND user_id = ${userId} AND role = 'author'::wiki_role_enum
-      LIMIT 1;
-    `;
-
-    const isPrimaryAuthor = membership.length > 0 || wiki.creator_id === userId;
-
-    if (!isGlobal && !isPrimaryAuthor) {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: Only the primary author or a global administrator can delete this wiki space.'
-      });
-    }
-
-    await prisma.$transaction([
-      prisma.$executeRaw`
-        DELETE FROM reading_list_items
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM reports
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM article_versions
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM articles
-        WHERE wiki_id = ${wikiId};
-      `,
-      prisma.$executeRaw`
-        DELETE FROM user_wiki_follows
-        WHERE wiki_id = ${wikiId};
-      `,
-      prisma.$executeRaw`
-        DELETE FROM wiki_memberships
-        WHERE wiki_id = ${wikiId};
-      `,
-      prisma.$executeRaw`
-        DELETE FROM wiki_spaces
-        WHERE wiki_id = ${wikiId};
-      `
-    ]);
-
-    res.status(200).json({
-      success: true,
-      message: `Wiki space "${wiki.title}" and all nested articles have been permanently deleted.`
-    });
-  } catch (error) {
-    console.error('Delete wiki error:', error);
-    res.status(500).json({ success: false, message: 'Failed to delete wiki space' });
-  }
-});
-
-// 8. TOGGLE FOLLOW/UNFOLLOW WIKI
+// 9. TOGGLE FOLLOW WIKI
 router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -400,7 +480,7 @@ router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
   }
 });
 
-// 9. TOGGLE FOLLOW/UNFOLLOW CATEGORY
+// 10. TOGGLE FOLLOW CATEGORY
 router.post('/categories/:categoryId/follow', authenticateToken, async (req, res) => {
   try {
     const categoryId = Number(req.params.categoryId);
@@ -424,96 +504,6 @@ router.post('/categories/:categoryId/follow', authenticateToken, async (req, res
   } catch (error) {
     console.error('Toggle category follow error:', error);
     res.status(500).json({ success: false, message: 'Failed to update category follow' });
-  }
-});
-
-// GET ELIGIBLE CATEGORIES FOR A WIKI (Recursive CTE from wiki anchor category down to leaf subcategories)
-router.get('/:wikiId/categories', optionalAuth, async (req, res) => {
-  try {
-    const wikiId = Number(req.params.wikiId);
-
-    const wiki = await prisma.$queryRaw`
-      SELECT wiki_id::INT AS wiki_id, category_id::INT AS category_id
-      FROM wiki_spaces
-      WHERE wiki_id = ${wikiId}
-      LIMIT 1;
-    `;
-
-    if (wiki.length === 0) {
-      return res.status(404).json({ success: false, message: 'Wiki space not found' });
-    }
-
-    const baseCategoryId = wiki[0].category_id;
-
-    let categories = [];
-    if (baseCategoryId) {
-      categories = await prisma.$queryRaw`
-        WITH RECURSIVE CategoryBranch AS (
-          SELECT 
-            c.category_id::INT AS category_id,
-            c.name,
-            c.parent_id::INT AS parent_id,
-            0 AS depth
-          FROM categories c
-          WHERE c.category_id = ${baseCategoryId}
-
-          UNION ALL
-
-          SELECT 
-            c.category_id::INT AS category_id,
-            c.name,
-            c.parent_id::INT AS parent_id,
-            cb.depth + 1 AS depth
-          FROM categories c
-          INNER JOIN CategoryBranch cb ON c.parent_id = cb.category_id
-        )
-        SELECT * FROM CategoryBranch ORDER BY depth ASC, name ASC;
-      `;
-    } else {
-      // Fallback: If wiki space has no category assigned yet, list all categories
-      categories = await prisma.$queryRaw`
-        SELECT 
-          c.category_id::INT AS category_id,
-          c.name,
-          c.parent_id::INT AS parent_id,
-          0 AS depth
-        FROM categories c
-        ORDER BY c.name ASC;
-      `;
-    }
-
-    res.status(200).json({
-      success: true,
-      baseCategoryId,
-      categories
-    });
-  } catch (error) {
-    console.error('Fetch eligible categories error:', error);
-    res.status(500).json({ success: false, message: 'Failed to load eligible categories' });
-  }
-});
-
-
-router.get('/directory', async (req, res) => {
-  try {
-    const wikis = await prisma.$queryRaw`
-      SELECT 
-        w.wiki_id::INT AS wiki_id,
-        w.title,
-        w.slug,
-        w.description,
-        w.category_id::INT AS category_id,
-        w.total_views::INT AS total_views,
-        c.name AS category_name,
-        (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
-      FROM wiki_spaces w
-      LEFT JOIN categories c ON w.category_id = c.category_id
-      ORDER BY w.title ASC;
-    `;
-    res.status(200).json({ success: true, wikis });
-  } catch (error) {
-    console.error('Fetch directory error:', error);
-    res.status(500).json({ success: false, message: 'Failed to load wiki directory' });
   }
 });
 

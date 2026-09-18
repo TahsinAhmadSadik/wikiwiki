@@ -131,6 +131,7 @@ router.get('/', async (req, res) => {
               a.title,
               a.slug,
               COALESCE(a.description, '') AS description,
+              a.thumbnail_url,
               a.read_count::INT AS read_count,
               a.created_at,
               w.wiki_id::INT AS wiki_id,
@@ -180,6 +181,7 @@ router.get('/', async (req, res) => {
               a.title,
               a.slug,
               COALESCE(a.description, '') AS description,
+              a.thumbnail_url,
               COALESCE(NULLIF(a.description, ''), 'No excerpt available.') AS snippet,
               a.read_count::INT AS read_count,
               a.created_at,
@@ -216,6 +218,7 @@ router.get('/', async (req, res) => {
             a.title,
             a.slug,
             COALESCE(a.description, '') AS description,
+            a.thumbnail_url,
             COALESCE(NULLIF(a.description, ''), 'No excerpt available.') AS snippet,
             a.read_count::INT AS read_count,
             a.created_at,
@@ -256,6 +259,7 @@ router.get('/', async (req, res) => {
             w.title,
             w.slug,
             COALESCE(w.description, '') AS description,
+            COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
             w.total_views::INT AS total_views,
             (
               SELECT COUNT(*)::INT 
@@ -263,6 +267,7 @@ router.get('/', async (req, res) => {
               WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE
             ) AS article_count
           FROM wiki_spaces w
+          LEFT JOIN media m ON w.media_id = m.media_id
           WHERE (${categoryIds}::INT[] IS NULL OR w.category_id = ANY(${categoryIds}::INT[]))
             AND (
               w.title ILIKE '%' || ${searchTerm}::TEXT || '%' 
@@ -280,6 +285,7 @@ router.get('/', async (req, res) => {
             w.title,
             w.slug,
             COALESCE(w.description, '') AS description,
+            COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
             w.total_views::INT AS total_views,
             (
               SELECT COUNT(*)::INT 
@@ -287,6 +293,7 @@ router.get('/', async (req, res) => {
               WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE
             ) AS article_count
           FROM wiki_spaces w
+          LEFT JOIN media m ON w.media_id = m.media_id
           WHERE (${categoryIds}::INT[] IS NULL OR w.category_id = ANY(${categoryIds}::INT[]))
           ORDER BY 
             CASE WHEN ${sort}::TEXT = 'alpha' THEN w.title END ASC,

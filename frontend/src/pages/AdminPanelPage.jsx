@@ -18,25 +18,19 @@ export default function AdminPanelPage() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [reviewActionMsg, setReviewActionMsg] = useState({ text: '', type: '' });
 
-  // Inspection modal state
   const [inspectingVersion, setInspectingVersion] = useState(null);
   const [approvalFeedback, setApprovalFeedback] = useState('');
-
-  // Demerit selection per report
   const [demeritSelections, setDemeritSelections] = useState({});
 
-  // Category creation form state
   const [newCatName, setNewCatName] = useState('');
   const [parentCatId, setParentCatId] = useState('');
   const [catStatus, setCatStatus] = useState({ text: '', type: '' });
   const [creatingCat, setCreatingCat] = useState(false);
 
-  // Co-author form
   const [selectedWikiId, setSelectedWikiId] = useState('');
   const [coAuthorEmail, setCoAuthorEmail] = useState('');
   const [coAuthorMsg, setCoAuthorMsg] = useState({ text: '', type: '' });
 
-  // Site Owner form
   const [adminEmail, setAdminEmail] = useState('');
   const [ownerMsg, setOwnerMsg] = useState({ text: '', type: '' });
 
@@ -121,7 +115,6 @@ export default function AdminPanelPage() {
       setNewCatName('');
       setParentCatId('');
 
-      // Refresh categories list
       const updatedCats = await api.get('/categories');
       setCategories(updatedCats.categories || []);
     } catch (err) {
@@ -467,7 +460,7 @@ export default function AdminPanelPage() {
           </div>
         )}
 
-        {/* 4. TAXONOMY & CATEGORY TREE (GLOBAL ADMINS ONLY) */}
+        {/* 4. TAXONOMY & CATEGORY TREE */}
         {isGlobalAdmin && (
           <section style={{
             backgroundColor: '#0d0d0f',
@@ -531,7 +524,6 @@ export default function AdminPanelPage() {
               </button>
             </form>
 
-            {/* Existing Categories Pill Grid */}
             <div style={{ borderTop: '1px solid #1f1f23', paddingTop: '1rem' }}>
               <span style={{ fontSize: '0.75rem', color: '#71717a', textTransform: 'uppercase', display: 'block', marginBottom: '0.75rem' }}>
                 Registered Taxonomy Topics ({categories.length})
@@ -587,7 +579,7 @@ export default function AdminPanelPage() {
           </section>
         )}
 
-        {/* 6. YOUR MANAGED WIKIS */}
+        {/* 6. YOUR MANAGED WIKIS (WITH COVERS) */}
         <section style={{ marginBottom: '2.5rem' }}>
           <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Your Managed Wikis</h2>
           {wikis.length === 0 ? (
@@ -597,27 +589,66 @@ export default function AdminPanelPage() {
               {wikis.map((w) => {
                 const roleBadge = getRoleConfig(null, w.user_role);
                 return (
-                  <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
-                        <Link to={`/wiki/${w.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
-                          {w.title}
-                        </Link>
-                      </h3>
-                      <span style={{
-                        fontSize: '0.7rem',
-                        color: roleBadge?.color || '#a1a1aa',
-                        backgroundColor: roleBadge?.bg || '#1f1f23',
-                        border: `1px solid ${roleBadge?.color || '#3f3f46'}40`,
-                        padding: '0.2rem 0.5rem',
-                        borderRadius: 9999
+                  <div key={w.wiki_id} style={{
+                    backgroundColor: '#0d0d0f',
+                    border: '1px solid #1f1f23',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between'
+                  }}>
+                    <div>
+                      {/* Wiki Cover Banner */}
+                      <div style={{
+                        height: 95,
+                        width: '100%',
+                        backgroundColor: '#141417',
+                        backgroundImage: w.cover_image_url ? `url(${w.cover_image_url})` : 'none',
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                        borderBottom: '1px solid #1f1f23',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
                       }}>
-                        {roleBadge?.icon && <span style={{ color: roleBadge.color, marginRight: '0.25rem' }}>{roleBadge.icon}</span>}
-                        {roleBadge?.label || w.user_role}
-                      </span>
+                        {!w.cover_image_url && <span style={{ color: '#3f3f46', fontSize: '1.5rem' }}>📚</span>}
+                      </div>
+
+                      <div style={{ padding: '1rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                          <h3 style={{ margin: 0, fontSize: '1.05rem' }}>
+                            <Link to={`/wiki/${w.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                              {w.title}
+                            </Link>
+                          </h3>
+                          <span style={{
+                            fontSize: '0.7rem',
+                            color: roleBadge?.color || '#a1a1aa',
+                            backgroundColor: roleBadge?.bg || '#1f1f23',
+                            border: `1px solid ${roleBadge?.color || '#3f3f46'}40`,
+                            padding: '0.2rem 0.5rem',
+                            borderRadius: 9999
+                          }}>
+                            {roleBadge?.icon && <span style={{ color: roleBadge.color, marginRight: '0.25rem' }}>{roleBadge.icon}</span>}
+                            {roleBadge?.label || w.user_role}
+                          </span>
+                        </div>
+                        <p style={{
+                          color: '#71717a',
+                          fontSize: '0.825rem',
+                          margin: '0 0 0.75rem 0',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden'
+                        }}>
+                          {w.description || 'No description provided'}
+                        </p>
+                      </div>
                     </div>
-                    <p style={{ color: '#71717a', fontSize: '0.85rem', margin: '0 0 1rem 0' }}>{w.description || 'No description provided'}</p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: '#a1a1aa', borderTop: '1px solid #1f1f23', paddingTop: '0.75rem' }}>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: '#a1a1aa', borderTop: '1px solid #1f1f23', padding: '0.75rem 1rem' }}>
                       <span>Articles: {w.article_count}</span>
                       <span>Views: {w.total_views}</span>
                     </div>

@@ -7,13 +7,12 @@ import '../styles/auth.css';
 
 export default function LibraryPage() {
   const { user, updateUser } = useAuth();
-  const [tab, setTab] = useState('published'); // 'published' | 'pending' | 'reports' | 'lists'
+  const [tab, setTab] = useState('published');
   const [data, setData] = useState({ published: [], pending: [], reports: [] });
   const [demerits, setDemerits] = useState(user?.demerit_points || 0);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Reading Lists States
   const [readingLists, setReadingLists] = useState([]);
   const [activeListDetail, setActiveListDetail] = useState(null);
   const [newCollectionTitle, setNewCollectionTitle] = useState('');
@@ -43,7 +42,6 @@ export default function LibraryPage() {
       setLoading(false);
     }
 
-    // Load reading lists independently so an error never blocks the published tab
     try {
       const listsRes = await api.get('/reading-lists');
       setReadingLists(listsRes.lists || []);
@@ -135,7 +133,6 @@ export default function LibraryPage() {
           <div style={{ color: '#71717a' }}>Loading library...</div>
         ) : (
           <div>
-            {/* TABS NAVIGATION */}
             <div style={{ display: 'flex', gap: '1rem', borderBottom: '1px solid #1f1f23', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
               <button
                 onClick={() => { setTab('published'); setActiveListDetail(null); }}
@@ -195,7 +192,7 @@ export default function LibraryPage() {
               </button>
             </div>
 
-            {/* TAB 1: PUBLISHED ARTICLES */}
+            {/* TAB 1: PUBLISHED ARTICLES (WITH THUMBNAILS) */}
             {tab === 'published' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {data.published.length === 0 ? (
@@ -207,14 +204,39 @@ export default function LibraryPage() {
                       style={{
                         backgroundColor: '#0d0d0f',
                         border: '1px solid #1f1f23',
-                        padding: '1.25rem',
-                        borderRadius: 6,
+                        padding: '1.15rem 1.25rem',
+                        borderRadius: 8,
                         display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center'
+                        alignItems: 'center',
+                        gap: '1.25rem'
                       }}
                     >
-                      <div style={{ flex: 1, marginRight: '1.25rem' }}>
+                      {/* Thumbnail Preview */}
+                      <div style={{
+                        width: 75,
+                        height: 75,
+                        borderRadius: 6,
+                        backgroundColor: '#141417',
+                        border: '1px solid #27272a',
+                        flexShrink: 0,
+                        overflow: 'hidden',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        {art.thumbnail_url ? (
+                          <img
+                            src={art.thumbnail_url}
+                            alt={art.title}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                          />
+                        ) : (
+                          <span style={{ fontSize: '1.5rem', color: '#3f3f46' }}>📄</span>
+                        )}
+                      </div>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
                         <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
                           <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a1a1aa', textDecoration: 'none' }}>
                             {art.wiki_title}
@@ -222,7 +244,6 @@ export default function LibraryPage() {
                         </span>
                         <h3 style={{ margin: '0.2rem 0', fontSize: '1.1rem' }}>{art.title}</h3>
 
-                        {/* 2-line Ellipsis Description */}
                         <p style={{
                           margin: '0.25rem 0 0.5rem 0',
                           color: '#a1a1aa',
@@ -237,7 +258,7 @@ export default function LibraryPage() {
                           {art.description || 'No description available.'}
                         </p>
 
-                        <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
                           Live Version: v{art.published_version} • {art.read_count} reads
                         </span>
                       </div>
@@ -404,10 +425,9 @@ export default function LibraryPage() {
               </div>
             )}
 
-            {/* TAB 4: READING LISTS & BOOKMARKS */}
+            {/* TAB 4: READING LISTS */}
             {tab === 'lists' && (
               <div>
-                {/* CREATE LIST BAR */}
                 <form onSubmit={handleCreateCollection} style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
                   <input
                     type="text"
@@ -423,7 +443,6 @@ export default function LibraryPage() {
                   </button>
                 </form>
 
-                {/* ACTIVE LIST DRILL-DOWN */}
                 {activeListDetail && (
                   <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #a855f750', borderRadius: 8, padding: '1.25rem', marginBottom: '1.5rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
@@ -444,14 +463,24 @@ export default function LibraryPage() {
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                         {activeListDetail.articles.map((art) => (
-                          <div key={art.article_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#141417', padding: '0.65rem 0.85rem', borderRadius: 4 }}>
-                            <div>
-                              <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none', fontSize: '0.9rem', fontWeight: 500 }}>
-                                {art.title}
-                              </Link>
-                              <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.75rem' }}>
-                                {art.wiki_title} • {art.read_count} views
-                              </span>
+                          <div key={art.article_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#141417', padding: '0.65rem 0.85rem', borderRadius: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                              {art.thumbnail_url && (
+                                <img
+                                  src={art.thumbnail_url}
+                                  alt={art.title}
+                                  style={{ width: 40, height: 40, borderRadius: 4, objectFit: 'cover' }}
+                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                />
+                              )}
+                              <div>
+                                <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none', fontSize: '0.9rem', fontWeight: 500 }}>
+                                  {art.title}
+                                </Link>
+                                <span style={{ fontSize: '0.75rem', color: '#71717a', marginLeft: '0.75rem' }}>
+                                  {art.wiki_title} • {art.read_count} views
+                                </span>
+                              </div>
                             </div>
                             <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ fontSize: '0.75rem', color: '#a855f7', textDecoration: 'none' }}>
                               Read →
@@ -463,7 +492,6 @@ export default function LibraryPage() {
                   </div>
                 )}
 
-                {/* LISTS GRID */}
                 {readingLists.length === 0 ? (
                   <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '2.5rem', borderRadius: 6, textAlign: 'center' }}>
                     <p style={{ color: '#71717a', margin: 0 }}>No reading lists created yet. Create one above or bookmark an article!</p>

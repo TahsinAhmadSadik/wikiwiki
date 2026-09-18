@@ -127,20 +127,22 @@ export default function Navbar() {
           {user ? (
             <>
 
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.35rem',
-                backgroundColor: roleBadge.bg,
-                color: roleBadge.color,
-                border: `1px solid ${roleBadge.color}40`,
-                borderRadius: 9999,
-                padding: '0.2rem 0.65rem',
-                fontSize: '0.75rem',
-                fontWeight: 600
-              }}>
-                <span style={{ color: roleBadge.color }}>{roleBadge.icon}</span> {roleBadge.label}
-              </span>
+              {user && ['owner', 'admin'].includes(user.global_role) && (
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  backgroundColor: roleBadge.bg,
+                  color: roleBadge.color,
+                  border: `1px solid ${roleBadge.color}40`,
+                  borderRadius: 9999,
+                  padding: '0.2rem 0.65rem',
+                  fontSize: '0.75rem',
+                  fontWeight: 600
+                }}>
+                  <span style={{ color: roleBadge.color }}>{roleBadge.icon}</span> {roleBadge.label}
+                </span>
+              )}
 
               <Link to="/settings" style={{ color: '#a1a1aa', textDecoration: 'none', fontSize: '0.875rem' }}>
                 Settings

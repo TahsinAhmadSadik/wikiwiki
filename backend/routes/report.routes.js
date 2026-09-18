@@ -14,6 +14,23 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Article ID and reason are required' });
     }
 
+    // Check for existing pending report by this user on this article
+    const existing = await prisma.$queryRaw`
+      SELECT report_id 
+      FROM reports 
+      WHERE article_id = ${Number(article_id)} 
+        AND reporter_id = ${reporterId} 
+        AND status = 'pending'
+      LIMIT 1;
+    `;
+
+    if (existing.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'You already have an unresolved report pending for this article.'
+      });
+    }
+
     await prisma.$executeRaw`
       INSERT INTO reports (article_id, version_id, reporter_id, reason, status)
       VALUES (

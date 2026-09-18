@@ -149,9 +149,14 @@ export default function SettingsPage() {
     <div className="settings-container">
       {/* TOP NAVIGATION */}
       <header className="settings-topbar">
-        <Link to="/" className="topbar-link">
-          ← Back to Explore
-        </Link>
+        <button 
+          type="button" 
+          onClick={() => navigate(-1)} 
+          className="topbar-btn"
+          style={{ background: 'none', border: 'none', color: '#a1a1aa', cursor: 'pointer', padding: 0 }}
+        >
+          ← Back
+        </button>
         <button onClick={logout} className="topbar-btn">
           Log out
         </button>

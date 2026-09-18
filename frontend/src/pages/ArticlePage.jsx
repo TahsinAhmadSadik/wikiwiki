@@ -52,7 +52,7 @@ export default function ArticlePage() {
         setIsReportOpen(false);
         setReportReason('');
         setReportStatus({ text: '', type: '' });
-      }, 1800);
+      }, 1000); // Closes automatically after 1 second
     } catch (err) {
       setReportStatus({ text: err.data?.message || err.message, type: 'error' });
     }

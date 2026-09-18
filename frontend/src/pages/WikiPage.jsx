@@ -37,7 +37,7 @@ export default function WikiPage() {
     if (!user) return navigate('/login');
     try {
       const res = await api.post(`/wikis/${wiki.wiki_id}/follow`);
-      setWiki(prev => ({
+      setWiki((prev) => ({
         ...prev,
         isFollowingWiki: res.following,
         follower_count: res.following ? prev.follower_count + 1 : prev.follower_count - 1
@@ -51,22 +51,31 @@ export default function WikiPage() {
     if (!user) return navigate('/login');
     try {
       const res = await api.post(`/wikis/categories/${wiki.category_id}/follow`);
-      setWiki(prev => ({ ...prev, isFollowingCategory: res.following }));
+      setWiki((prev) => ({ ...prev, isFollowingCategory: res.following }));
     } catch (err) {
       console.error(err);
     }
   };
 
-  if (loading) return <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#71717a', padding: '2rem' }}>Loading wiki space...</div>;
-  if (errorMsg || !wiki) return (
-    <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
-      <Navbar />
-      <div style={{ maxWidth: 800, margin: '3rem auto', textAlign: 'center' }}>
-        <h2 style={{ color: '#ef4444' }}>Wiki Space Not Found</h2>
-        <Link to="/" style={{ color: '#a1a1aa' }}>← Return Home</Link>
+  if (loading) {
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#71717a', padding: '2rem' }}>
+        Loading wiki space...
       </div>
-    </div>
-  );
+    );
+  }
+
+  if (errorMsg || !wiki) {
+    return (
+      <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
+        <Navbar />
+        <div style={{ maxWidth: 800, margin: '3rem auto', textAlign: 'center' }}>
+          <h2 style={{ color: '#ef4444' }}>Wiki Space Not Found</h2>
+          <Link to="/" style={{ color: '#a1a1aa' }}>← Return Home</Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
@@ -178,21 +187,42 @@ export default function WikiPage() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {articles.map((art) => (
-                <div key={art.article_id} style={{
-                  backgroundColor: '#0d0d0f',
-                  border: '1px solid #1f1f23',
-                  padding: '1.25rem',
-                  borderRadius: 6,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <div>
-                    <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem' }}>
+                <div
+                  key={art.article_id}
+                  style={{
+                    backgroundColor: '#0d0d0f',
+                    border: '1px solid #1f1f23',
+                    padding: '1.25rem',
+                    borderRadius: 6,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div style={{ flex: 1, marginRight: '1.25rem' }}>
+                    <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.1rem' }}>
                       <Link to={`/wiki/${wiki.slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
                         {art.title}
                       </Link>
                     </h3>
+
+                    {/* 2-Line Ellipsis Snippet */}
+                    <p
+                      style={{
+                        margin: '0 0 0.5rem 0',
+                        color: '#a1a1aa',
+                        fontSize: '0.85rem',
+                        lineHeight: 1.45,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                    >
+                      {art.description || 'No description available.'}
+                    </p>
+
                     <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
                       v{art.published_version} • {art.read_count} reads • Published {new Date(art.created_at).toLocaleDateString()}
                     </span>
@@ -207,7 +237,8 @@ export default function WikiPage() {
                       padding: '0.45rem 0.85rem',
                       borderRadius: 4,
                       textDecoration: 'none',
-                      fontSize: '0.8125rem'
+                      fontSize: '0.8125rem',
+                      whiteSpace: 'nowrap'
                     }}
                   >
                     Read →

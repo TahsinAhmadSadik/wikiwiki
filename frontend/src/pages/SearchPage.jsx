@@ -30,8 +30,8 @@ export default function SearchPage() {
   // Load category tree once
   useEffect(() => {
     api.get('/search/categories/tree')
-      .then(res => setCategoryTree(res.tree || []))
-      .catch(err => console.error(err));
+      .then((res) => setCategoryTree(res.tree || []))
+      .catch((err) => console.error(err));
   }, []);
 
   // Trigger search on filter changes
@@ -112,7 +112,7 @@ export default function SearchPage() {
             </button>
           </div>
 
-          {/* ADVANCED BOOLEAN ACCORDION (MODULE 10) */}
+          {/* ADVANCED BOOLEAN ACCORDION */}
           {showAdvanced && (
             <div style={{
               backgroundColor: '#0d0d0f',
@@ -204,7 +204,7 @@ export default function SearchPage() {
             }}>
               {/* Type Tabs */}
               <div style={{ display: 'flex', gap: '0.5rem' }}>
-                {['all', 'articles', 'wikis'].map(tab => (
+                {['all', 'articles', 'wikis'].map((tab) => (
                   <button
                     key={tab}
                     type="button"
@@ -255,22 +255,22 @@ export default function SearchPage() {
                       Wiki Spaces ({wikis.length})
                     </h3>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '0.75rem' }}>
-                        {wikis.map(w => (
-                            <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1rem', borderRadius: 6 }}>
-                                <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>
-                                <Link 
-                                    to={`/wiki/${w.slug}`} 
-                                    style={{ color: '#fff', textDecoration: 'none' }}
-                                >
-                                    {w.title}
-                                </Link>
-                                </h4>
-                                <p style={{ margin: '0 0 0.5rem 0', color: '#71717a', fontSize: '0.8rem' }}>{w.description}</p>
-                                <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                                {w.article_count} articles • {w.total_views} views
-                                </span>
-                            </div>
-                        ))}
+                      {wikis.map((w) => (
+                        <div key={w.wiki_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1rem', borderRadius: 6 }}>
+                          <h4 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem' }}>
+                            <Link 
+                              to={`/wiki/${w.slug}`} 
+                              style={{ color: '#fff', textDecoration: 'none' }}
+                            >
+                              {w.title}
+                            </Link>
+                          </h4>
+                          <p style={{ margin: '0 0 0.5rem 0', color: '#71717a', fontSize: '0.8rem' }}>{w.description}</p>
+                          <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                            {w.article_count} articles • {w.total_views} views
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
@@ -290,7 +290,7 @@ export default function SearchPage() {
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        {articles.map(art => (
+                        {articles.map((art) => (
                           <div key={art.article_id} style={{
                             backgroundColor: '#0d0d0f',
                             border: '1px solid #1f1f23',
@@ -300,24 +300,40 @@ export default function SearchPage() {
                             justifyContent: 'space-between',
                             alignItems: 'center'
                           }}>
-                            <div>
-                                <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                                    <Link 
-                                        to={`/wiki/${art.wiki_slug}`} 
-                                        style={{ color: '#a855f7', textDecoration: 'none' }}
-                                    >
-                                        {art.wiki_title}
-                                    </Link>{' '}
-                                    • {art.category_name || 'General'}
-                                </span>
+                            <div style={{ flex: 1, marginRight: '1.25rem' }}>
+                              <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                                <Link 
+                                  to={`/wiki/${art.wiki_slug}`} 
+                                  style={{ color: '#a855f7', textDecoration: 'none' }}
+                                >
+                                  {art.wiki_title}
+                                </Link>{' '}
+                                • {art.category_name || 'General'}
+                              </span>
                               <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>
                                 <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
                                   {art.title}
                                 </Link>
                               </h3>
-                              <p style={{ margin: '0 0 0.4rem 0', color: '#a1a1aa', fontSize: '0.85rem' }}>
-                                {art.snippet || 'No excerpt available.'}
-                              </p>
+
+                              {/* Highlighted Snippet via dangerouslySetInnerHTML */}
+                              <p
+                                style={{
+                                  margin: '0 0 0.4rem 0',
+                                  color: '#a1a1aa',
+                                  fontSize: '0.85rem',
+                                  lineHeight: 1.45,
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis'
+                                }}
+                                dangerouslySetInnerHTML={{
+                                  __html: art.snippet || art.description || 'No excerpt available.'
+                                }}
+                              />
+
                               <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
                                 v{art.version_number} • {art.read_count} reads • Edited {new Date(art.last_edited_at).toLocaleDateString()}
                               </span>
@@ -332,7 +348,8 @@ export default function SearchPage() {
                                 padding: '0.45rem 0.85rem',
                                 borderRadius: 4,
                                 textDecoration: 'none',
-                                fontSize: '0.8125rem'
+                                fontSize: '0.8125rem',
+                                whiteSpace: 'nowrap'
                               }}
                             >
                               Read →

@@ -14,7 +14,7 @@ export default function HomePage() {
   const [topReads, setTopReads] = useState([]);
   const [forYouArticles, setForYouArticles] = useState([]);
 
-  // Teacher Stats Interactive Explorer State (Stat 2 & 3)
+  // Analytical Explorer State (Stats 1, 2, and 3)
   const [statTab, setStatTab] = useState('top-reads'); // 'top-reads' | 'topic-time' | 'cross-topic'
   const [selectedCategory, setSelectedCategory] = useState('');
   const [timeDays, setTimeDays] = useState(30);
@@ -23,6 +23,9 @@ export default function HomePage() {
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+
+  const [followedCategories, setFollowedCategories] = useState([]);
+  const [followedWikis, setFollowedWikis] = useState([]);
 
   useEffect(() => {
     const fetchLandingData = async () => {
@@ -44,6 +47,8 @@ export default function HomePage() {
         if (user) {
           const forYouRes = await api.get('/home/for-you');
           setForYouArticles(forYouRes.articles || []);
+          setFollowedCategories(forYouRes.followedCategories || []);
+          setFollowedWikis(forYouRes.followedWikis || []);
         }
       } catch (err) {
         setErrorMsg(err.data?.message || err.message || 'Failed to load explore feed.');
@@ -55,7 +60,7 @@ export default function HomePage() {
     fetchLandingData();
   }, [user]);
 
-  // Fetch Topic Performance (Stat 2) when category or days toggle changes
+  // Fetch Topic Performance (Stat 2) when category or days change
   useEffect(() => {
     if (statTab === 'topic-time' && selectedCategory) {
       api.get(`/stats/topic-performance?category_id=${selectedCategory}&days=${timeDays}&limit=6`)
@@ -159,19 +164,16 @@ export default function HomePage() {
                 justifyContent: 'space-between'
               }}>
                 <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
-                            <Link 
-                            to={`/wiki/${wiki.slug}`} 
-                            style={{ color: '#fff', textDecoration: 'none' }}
-                            >
-                            {wiki.title}
-                            </Link>
-                        </h3>
-                        <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
-                            ⚡ {wiki.velocity_score}
-                        </span>
-                    </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
+                      <Link to={`/wiki/${wiki.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                        {wiki.title}
+                      </Link>
+                    </h3>
+                    <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
+                      ⚡ {wiki.velocity_score}
+                    </span>
+                  </div>
                   <p style={{ color: '#71717a', fontSize: '0.825rem', margin: '0.5rem 0 1rem 0' }}>
                     {wiki.description || 'No description available'}
                   </p>
@@ -202,6 +204,7 @@ export default function HomePage() {
             {/* Metric Switcher Tabs */}
             <div style={{ display: 'flex', backgroundColor: '#141417', borderRadius: 6, padding: '0.2rem', border: '1px solid #27272a' }}>
               <button
+                type="button"
                 onClick={() => setStatTab('top-reads')}
                 style={{
                   background: statTab === 'top-reads' ? '#27272a' : 'transparent',
@@ -216,6 +219,7 @@ export default function HomePage() {
                 Top Reads (Stat 1)
               </button>
               <button
+                type="button"
                 onClick={() => setStatTab('topic-time')}
                 style={{
                   background: statTab === 'topic-time' ? '#27272a' : 'transparent',
@@ -230,6 +234,7 @@ export default function HomePage() {
                 Topic vs Time (Stat 2)
               </button>
               <button
+                type="button"
                 onClick={() => setStatTab('cross-topic')}
                 style={{
                   background: statTab === 'cross-topic' ? '#27272a' : 'transparent',
@@ -271,7 +276,6 @@ export default function HomePage() {
           {/* STAT 2: TOPIC OVER TIME (USES UDF) */}
           {statTab === 'topic-time' && (
             <div>
-              {/* Controls: Topic Picker and Time Period Toggle */}
               <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
                 <select
                   value={selectedCategory}
@@ -292,6 +296,7 @@ export default function HomePage() {
                   ].map((p) => (
                     <button
                       key={p.val}
+                      type="button"
                       onClick={() => setTimeDays(p.val)}
                       style={{
                         backgroundColor: timeDays === p.val ? '#3b82f6' : '#18181b',
@@ -344,6 +349,7 @@ export default function HomePage() {
                 ].map((p) => (
                   <button
                     key={p.val}
+                    type="button"
                     onClick={() => setTimeDays(p.val)}
                     style={{
                       backgroundColor: timeDays === p.val ? '#10b981' : '#18181b',
@@ -386,10 +392,71 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* 4. "FOR YOU" FEED (MODULE 01) */}
+        {/* 4. "FOR YOU" FEED */}
         <section style={{ marginBottom: '3rem' }}>
           <h2 style={{ fontSize: '1.35rem', margin: '0 0 1rem 0' }}>For You: Recommended Articles</h2>
 
+          {user && (
+            <div style={{
+              backgroundColor: '#0d0d0f',
+              border: '1px solid #1f1f23',
+              borderRadius: 8,
+              padding: '1.25rem',
+              marginBottom: '1.5rem'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                <h3 style={{ fontSize: '0.95rem', margin: 0, color: '#f4f4f5' }}>Your Followed Interests</h3>
+                <Link to="/settings" style={{ fontSize: '0.75rem', color: '#a855f7', textDecoration: 'none' }}>
+                  Manage in Settings →
+                </Link>
+              </div>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                {followedWikis.length === 0 && followedCategories.length === 0 ? (
+                  <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
+                    You are not following any spaces or genres yet. Explore categories above to personalize your feed!
+                  </span>
+                ) : (
+                  <>
+                    {followedWikis.map((w) => (
+                      <Link
+                        key={w.wiki_id}
+                        to={`/wiki/${w.slug}`}
+                        style={{
+                          fontSize: '0.75rem',
+                          backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                          border: '1px solid rgba(168, 85, 247, 0.3)',
+                          color: '#c084fc',
+                          padding: '0.25rem 0.65rem',
+                          borderRadius: 9999,
+                          textDecoration: 'none'
+                        }}
+                      >
+                        📖 {w.title}
+                      </Link>
+                    ))}
+                    {followedCategories.map((c) => (
+                      <span
+                        key={c.category_id}
+                        style={{
+                          fontSize: '0.75rem',
+                          backgroundColor: '#18181b',
+                          border: '1px solid #27272a',
+                          color: '#d4d4d8',
+                          padding: '0.25rem 0.65rem',
+                          borderRadius: 9999
+                        }}
+                      >
+                        🏷️ {c.name}
+                      </span>
+                    ))}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* FOR YOU ARTICLES FEED */}
           {!user ? (
             <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '2rem', borderRadius: 6, textAlign: 'center' }}>
               <p style={{ color: '#a1a1aa', margin: '0 0 1rem 0', fontSize: '0.9rem' }}>
@@ -402,37 +469,53 @@ export default function HomePage() {
           ) : forYouArticles.length === 0 ? (
             <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '2rem', borderRadius: 6, textAlign: 'center' }}>
               <p style={{ color: '#a1a1aa', margin: 0, fontSize: '0.9rem' }}>
-                You haven't followed any categories or wiki spaces yet. Follow some from your Settings or explore the topics above!
+                You haven't followed any categories or wiki spaces yet. Follow some from Settings or explore the topics above!
               </p>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
               {forYouArticles.map((art) => (
-                <div key={art.article_id} style={{
-                  backgroundColor: '#0d0d0f',
-                  border: '1px solid #1f1f23',
-                  padding: '1.25rem',
-                  borderRadius: 6,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <div>
+                <div
+                  key={art.article_id}
+                  style={{
+                    backgroundColor: '#0d0d0f',
+                    border: '1px solid #1f1f23',
+                    padding: '1.25rem',
+                    borderRadius: 6,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div style={{ flex: 1, marginRight: '1.25rem' }}>
                     <span style={{ fontSize: '0.75rem', color: '#a855f7' }}>
-                        {art.category_name} •{' '}
-                        <Link 
-                            to={`/wiki/${art.wiki_slug}`} 
-                            style={{ color: '#a855f7', textDecoration: 'underline' }}
-                        >
-                            {art.wiki_title}
-                        </Link>
+                      {art.category_name} •{' '}
+                      <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'underline' }}>
+                        {art.wiki_title}
+                      </Link>
                     </span>
                     <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>
                       <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
                         {art.title}
                       </Link>
                     </h3>
-                    <p style={{ margin: 0, color: '#a1a1aa', fontSize: '0.85rem' }}>{art.excerpt}</p>
+
+                    {/* 2-line Ellipsis Snippet */}
+                    <p
+                      style={{
+                        margin: '0.25rem 0 0 0',
+                        color: '#a1a1aa',
+                        fontSize: '0.85rem',
+                        lineHeight: 1.45,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}
+                    >
+                      {art.description || art.excerpt || 'No description available.'}
+                    </p>
                   </div>
 
                   <Link
@@ -444,7 +527,8 @@ export default function HomePage() {
                       padding: '0.45rem 0.85rem',
                       borderRadius: 4,
                       textDecoration: 'none',
-                      fontSize: '0.8125rem'
+                      fontSize: '0.8125rem',
+                      whiteSpace: 'nowrap'
                     }}
                   >
                     Read →

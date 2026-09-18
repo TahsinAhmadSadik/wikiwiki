@@ -202,19 +202,59 @@ export default function LibraryPage() {
                   <p style={{ color: '#71717a' }}>No published articles yet.</p>
                 ) : (
                   data.published.map((art) => (
-                    <div key={art.article_id} style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.25rem', borderRadius: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
+                    <div
+                      key={art.article_id}
+                      style={{
+                        backgroundColor: '#0d0d0f',
+                        border: '1px solid #1f1f23',
+                        padding: '1.25rem',
+                        borderRadius: 6,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div style={{ flex: 1, marginRight: '1.25rem' }}>
                         <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
                           <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a1a1aa', textDecoration: 'none' }}>
                             {art.wiki_title}
                           </Link>
                         </span>
                         <h3 style={{ margin: '0.2rem 0', fontSize: '1.1rem' }}>{art.title}</h3>
-                        <span style={{ fontSize: '0.8rem', color: '#a1a1aa' }}>
+
+                        {/* 2-line Ellipsis Description */}
+                        <p style={{
+                          margin: '0.25rem 0 0.5rem 0',
+                          color: '#a1a1aa',
+                          fontSize: '0.85rem',
+                          lineHeight: 1.45,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {art.description || 'No description available.'}
+                        </p>
+
+                        <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
                           Live Version: v{art.published_version} • {art.read_count} reads
                         </span>
                       </div>
-                      <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ backgroundColor: '#18181b', color: '#fff', border: '1px solid #27272a', padding: '0.45rem 0.85rem', borderRadius: 4, textDecoration: 'none', fontSize: '0.8125rem' }}>
+
+                      <Link
+                        to={`/wiki/${art.wiki_slug}/${art.slug}`}
+                        style={{
+                          backgroundColor: '#18181b',
+                          color: '#fff',
+                          border: '1px solid #27272a',
+                          padding: '0.45rem 0.85rem',
+                          borderRadius: 4,
+                          textDecoration: 'none',
+                          fontSize: '0.8125rem',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
                         Read Article →
                       </Link>
                     </div>

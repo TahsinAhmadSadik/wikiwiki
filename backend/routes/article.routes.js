@@ -4,11 +4,23 @@ import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
+function extractFirstParagraph(content) {
+  if (!content) return '';
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return '';
+  const p = blocks.find((b) => b.type === 'paragraph' && (b.data?.text || b.text));
+  if (!p) {
+    const anyText = blocks.find((b) => b.data?.text || b.text);
+    return anyText ? (anyText.data?.text || anyText.text || '').trim().slice(0, 300) : '';
+  }
+  return (p.data?.text || p.text || '').trim().slice(0, 300);
+}
+
 // CREATE ARTICLE (POST /api/articles)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { wiki_id, category_id, title, template_type = 'standard', content, edit_summary } = req.body;
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     if (!wiki_id || !title || !content) {
       return res.status(400).json({ success: false, message: 'Wiki ID, title, and content blocks are required' });
@@ -23,11 +35,23 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(409).json({ success: false, message: 'An article with this title already exists in this wiki' });
     }
 
+    // Auto-inherit category_id from the parent wiki space if omitted
+    const wikiInfo = await prisma.$queryRaw`
+      SELECT category_id::INT AS category_id 
+      FROM wiki_spaces 
+      WHERE wiki_id = ${Number(wiki_id)} 
+      LIMIT 1;
+    `;
+    const resolvedCategoryId = category_id 
+      ? Number(category_id) 
+      : (wikiInfo[0]?.category_id ? Number(wikiInfo[0].category_id) : null);
+
     const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
     const membership = await prisma.$queryRaw`
       SELECT role FROM wiki_memberships WHERE wiki_id = ${Number(wiki_id)} AND user_id = ${userId} LIMIT 1;
     `;
     const canPublishDirectly = isGlobal || membership.length > 0;
+    const excerpt = extractFirstParagraph(content);
 
     const result = await prisma.$transaction(async (tx) => {
       const articleRows = await tx.$queryRaw`
@@ -36,14 +60,16 @@ router.post('/', authenticateToken, async (req, res) => {
           category_id,
           title,
           slug,
+          description,
           template_type,
           is_published
         )
         VALUES (
           ${Number(wiki_id)},
-          ${category_id ? Number(category_id) : null},
+          ${resolvedCategoryId},
           ${title.trim()},
           ${slug},
+          ${excerpt},
           ${template_type},
           ${canPublishDirectly}
         )
@@ -101,9 +127,10 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
       SELECT 
         a.article_id::INT AS article_id,
         a.wiki_id::INT AS wiki_id,
-        a.category_id::INT AS category_id,
+        COALESCE(a.category_id, w.category_id)::INT AS category_id,
         a.title,
         a.slug,
+        COALESCE(a.description, '') AS description,
         a.template_type,
         a.is_locked,
         w.title AS wiki_title,
@@ -131,7 +158,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
     const versions = await prisma.$queryRaw`
       SELECT 
         version_id::INT AS version_id,
-        version_number,
+        version_number::INT AS version_number,
         content,
         edit_summary
       FROM article_versions
@@ -156,7 +183,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
     const { content, edit_summary } = req.body;
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     if (!content) {
       return res.status(400).json({ success: false, message: 'Content is required' });
@@ -209,6 +236,13 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
       );
     `;
 
+    if (canPublishDirectly) {
+      const excerpt = extractFirstParagraph(content);
+      await prisma.$executeRaw`
+        UPDATE articles SET description = ${excerpt} WHERE article_id = ${articleId};
+      `;
+    }
+
     res.status(201).json({
       success: true,
       message: canPublishDirectly
@@ -232,6 +266,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
         a.wiki_id::INT AS wiki_id,
         a.title,
         a.slug,
+        COALESCE(a.description, '') AS description,
         a.template_type,
         a.is_locked,
         a.is_published,
@@ -254,7 +289,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
     const versions = await prisma.$queryRaw`
       SELECT 
         av.version_id::INT AS version_id,
-        av.version_number,
+        av.version_number::INT AS version_number,
         av.content,
         av.edit_summary,
         av.created_at,
@@ -266,7 +301,6 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
       LIMIT 1;
     `;
 
-    // Increment read counts
     await prisma.$executeRaw`
       UPDATE articles SET read_count = read_count + 1 WHERE article_id = ${article.article_id};
     `;
@@ -285,10 +319,10 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   }
 });
 
-// GET PENDING REVISIONS FOR MANAGED WIKIS (For Authors, Co-Authors, and Global Admins)
+// GET PENDING REVISIONS FOR MANAGED WIKIS
 router.get('/pending-reviews', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
     const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
 
     let pending;
@@ -296,7 +330,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
       pending = await prisma.$queryRaw`
         SELECT 
           av.version_id::INT AS version_id,
-          av.version_number,
+          av.version_number::INT AS version_number,
           av.content,
           av.edit_summary,
           av.created_at,
@@ -319,7 +353,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
       pending = await prisma.$queryRaw`
         SELECT 
           av.version_id::INT AS version_id,
-          av.version_number,
+          av.version_number::INT AS version_number,
           av.content,
           av.edit_summary,
           av.created_at,
@@ -353,7 +387,7 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
   try {
     const versionId = Number(req.params.versionId);
     const { action, approval_feedback } = req.body;
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     if (!['approve', 'reject'].includes(action)) {
       return res.status(400).json({ success: false, message: 'Action must be approve or reject' });
@@ -363,6 +397,7 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
       SELECT 
         av.version_id::INT AS version_id,
         av.article_id::INT AS article_id,
+        av.content,
         av.is_published,
         a.wiki_id::INT AS wiki_id
       FROM article_versions av
@@ -389,6 +424,8 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
     }
 
     if (action === 'approve') {
+      const excerpt = extractFirstParagraph(ver.content);
+
       await prisma.$transaction([
         prisma.$executeRaw`
           UPDATE article_versions
@@ -399,7 +436,8 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
         `,
         prisma.$executeRaw`
           UPDATE articles
-          SET is_published = TRUE
+          SET is_published = TRUE,
+              description = ${excerpt}
           WHERE article_id = ${ver.article_id};
         `
       ]);

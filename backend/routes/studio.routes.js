@@ -6,7 +6,7 @@ const router = express.Router();
 
 router.get('/library', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     // 1. Articles that have at least one PUBLISHED version authored/edited by this user
     const publishedArticles = await prisma.$queryRaw`
@@ -14,6 +14,7 @@ router.get('/library', authenticateToken, async (req, res) => {
         a.article_id::INT AS article_id,
         a.title,
         a.slug,
+        COALESCE(a.description, '') AS description,
         a.read_count::INT AS read_count,
         a.created_at,
         w.title AS wiki_title,
@@ -34,7 +35,7 @@ router.get('/library', authenticateToken, async (req, res) => {
     const pendingRevisions = await prisma.$queryRaw`
       SELECT 
         av.version_id::INT AS version_id,
-        av.version_number,
+        av.version_number::INT AS version_number,
         av.edit_summary,
         av.approval_feedback,
         av.created_at,
@@ -65,7 +66,7 @@ router.get('/library', authenticateToken, async (req, res) => {
       INNER JOIN articles a ON r.article_id = a.article_id
       INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
       LEFT JOIN article_versions av ON r.version_id = av.version_id
-      WHERE av.editor_id = ${req.user.user_id}
+      WHERE av.editor_id = ${userId}
       ORDER BY r.created_at DESC;
     `;
 

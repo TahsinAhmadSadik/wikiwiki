@@ -715,3 +715,15 @@ CREATE INDEX IF NOT EXISTS idx_reading_list_items_article_id ON reading_list_ite
 
 ALTER TABLE reading_lists ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
 ALTER TABLE reading_lists ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT TRUE;
+
+
+
+
+
+-- 1. Add description column to articles
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
+
+
+
+
+ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES categories(category_id) ON DELETE SET NULL;

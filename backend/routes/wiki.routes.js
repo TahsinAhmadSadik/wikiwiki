@@ -5,15 +5,37 @@ import { authorizeWikiAccess } from '../middleware/wikiAuth.js';
 
 const router = express.Router();
 
-// GET ALL WIKIS THE CURRENT USER MANAGES (Author, Co-author, or All if Global Admin/Owner)
+// 1. GET DIRECTORY OF ALL WIKIS (FOR ARTICLE CREATION & DIRECTORY SEARCH)
+router.get('/directory', async (req, res) => {
+  try {
+    const wikis = await prisma.$queryRaw`
+      SELECT 
+        w.wiki_id::INT AS wiki_id,
+        w.title,
+        w.slug,
+        w.description,
+        w.total_views::INT AS total_views,
+        c.name AS category_name,
+        (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
+      FROM wiki_spaces w
+      LEFT JOIN categories c ON w.category_id = c.category_id
+      ORDER BY w.title ASC;
+    `;
+    res.status(200).json({ success: true, wikis });
+  } catch (error) {
+    console.error('Fetch directory error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load wiki directory' });
+  }
+});
+
+// 2. GET ALL WIKIS THE CURRENT USER MANAGES (Author, Co-author, or All if Global Admin/Owner)
 router.get('/managed', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
     const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
 
     let wikis;
     if (isGlobal) {
-      // Global Admins and Owner see all wikis
       wikis = await prisma.$queryRaw`
         SELECT 
           w.wiki_id::INT AS wiki_id,
@@ -29,7 +51,6 @@ router.get('/managed', authenticateToken, async (req, res) => {
         ORDER BY w.created_at DESC;
       `;
     } else {
-      // Contributors see only wikis where they are Author or Co-Author
       wikis = await prisma.$queryRaw`
         SELECT 
           w.wiki_id::INT AS wiki_id,
@@ -55,11 +76,11 @@ router.get('/managed', authenticateToken, async (req, res) => {
   }
 });
 
-// CREATE WIKI: Contributor creates wiki -> becomes Author in wiki_memberships
+// 3. CREATE WIKI
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { title, description, category_id } = req.body;
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     if (!title || !title.trim()) {
       return res.status(400).json({ success: false, message: 'Wiki title is required' });
@@ -74,7 +95,6 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(409).json({ success: false, message: 'A wiki with this title already exists' });
     }
 
-    // Insert wiki and add user as 'author' in wiki_memberships
     const newWiki = await prisma.$transaction(async (tx) => {
       const created = await tx.$queryRaw`
         INSERT INTO wiki_spaces (title, slug, description, creator_id, category_id)
@@ -103,7 +123,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// ASSIGN CO-AUTHOR BY EMAIL: Primary Author or Global Admin adds another user
+// 4. ASSIGN CO-AUTHOR BY EMAIL
 router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author'), async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -146,7 +166,7 @@ router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author')
   }
 });
 
-// GET WIKI MEMBERS LIST
+// 5. GET WIKI MEMBERS LIST
 router.get('/:wikiId/members', authenticateToken, authorizeWikiAccess('co_author'), async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -170,14 +190,12 @@ router.get('/:wikiId/members', authenticateToken, authorizeWikiAccess('co_author
   }
 });
 
-
-// 5. GET WIKI DETAILS BY SLUG WITH STATS, ARTICLES & SIMILAR WIKIS (MODULE 02)
+// 6. GET WIKI DETAILS BY SLUG WITH STATS, ARTICLES & SIMILAR WIKIS
 router.get('/public/:slug', optionalAuth, async (req, res) => {
   try {
     const { slug } = req.params;
-    const userId = req.user?.user_id || null;
+    const userId = req.user?.user_id ? Number(req.user.user_id) : null;
 
-    // Fetch core wiki metadata & category
     const wikis = await prisma.$queryRaw`
       SELECT 
         w.wiki_id::INT AS wiki_id,
@@ -203,7 +221,6 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
 
     const wiki = wikis[0];
 
-    // Check user membership role and follow status if authenticated
     let userRole = null;
     let isFollowingWiki = false;
     let isFollowingCategory = false;
@@ -227,12 +244,13 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
       }
     }
 
-    // Fetch published articles in this wiki
+    // Includes COALESCE(a.description, '') for snippet display
     const articles = await prisma.$queryRaw`
       SELECT 
         a.article_id::INT AS article_id,
         a.title,
         a.slug,
+        COALESCE(a.description, '') AS description,
         a.read_count::INT AS read_count,
         a.created_at,
         (
@@ -245,7 +263,6 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
       ORDER BY a.read_count DESC, a.created_at DESC;
     `;
 
-    // Fetch similar wikis sharing the category
     let similarWikis = [];
     if (wiki.category_id) {
       similarWikis = await prisma.$queryRaw`
@@ -280,11 +297,11 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
   }
 });
 
-// 6. TOGGLE FOLLOW/UNFOLLOW WIKI
+// 7. TOGGLE FOLLOW/UNFOLLOW WIKI
 router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     const existing = await prisma.$queryRaw`
       SELECT user_id FROM user_wiki_follows WHERE wiki_id = ${wikiId} AND user_id = ${userId} LIMIT 1;
@@ -307,11 +324,11 @@ router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
   }
 });
 
-// 7. TOGGLE FOLLOW/UNFOLLOW CATEGORY
+// 8. TOGGLE FOLLOW/UNFOLLOW CATEGORY
 router.post('/categories/:categoryId/follow', authenticateToken, async (req, res) => {
   try {
     const categoryId = Number(req.params.categoryId);
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     const existing = await prisma.$queryRaw`
       SELECT user_id FROM user_category_follows WHERE category_id = ${categoryId} AND user_id = ${userId} LIMIT 1;

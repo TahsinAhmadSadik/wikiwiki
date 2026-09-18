@@ -727,3 +727,16 @@ ALTER TABLE articles ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
 
 
 ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INT REFERENCES categories(category_id) ON DELETE SET NULL;
+
+
+
+
+
+
+-- 1. Add cover image column to wiki_spaces
+ALTER TABLE wiki_spaces 
+ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
+
+-- 2. Add thumbnail image column to articles
+ALTER TABLE articles 
+ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;

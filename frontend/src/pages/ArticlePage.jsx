@@ -4,6 +4,8 @@ import Navbar from '../components/Navbar';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
 export default function ArticlePage() {
   const { wikiSlug, articleSlug } = useParams();
   const { user } = useAuth();
@@ -105,7 +107,6 @@ export default function ArticlePage() {
     }
   };
 
-  // Lock / Unlock Article
   const handleToggleLock = async () => {
     try {
       const res = await api.patch(`/articles/${data.article.article_id}/lock`);
@@ -120,7 +121,6 @@ export default function ArticlePage() {
     }
   };
 
-  // Delete Article
   const handleDeleteArticle = async () => {
     setDeleting(true);
     try {
@@ -131,6 +131,11 @@ export default function ArticlePage() {
       setDeleting(false);
       setIsDeleteModalOpen(false);
     }
+  };
+
+  const formatImageUrl = (url) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `${API_BASE}${url}`;
   };
 
   if (loading) return <div style={{ color: '#71717a', padding: '2rem' }}>Loading article...</div>;
@@ -243,7 +248,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      <main style={{ maxWidth: 800, margin: '2.5rem auto', padding: '0 1.5rem' }}>
+      <main style={{ maxWidth: 840, margin: '2.5rem auto', padding: '0 1.5rem' }}>
         {lockStatusMsg && (
           <div className="auth-alert success" style={{ marginBottom: '1.5rem' }}>
             {lockStatusMsg}
@@ -264,7 +269,6 @@ export default function ArticlePage() {
 
             {/* ACTION & MODERATION CONTROLS */}
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              {/* AUTHOR / ADMIN CONTROLS: LOCK & DELETE */}
               {canManageArticle && (
                 <>
                   <button
@@ -303,7 +307,6 @@ export default function ArticlePage() {
                 </>
               )}
 
-              {/* REPORT BUTTON */}
               {user && (
                 <button
                   type="button"
@@ -346,7 +349,6 @@ export default function ArticlePage() {
                     🔖 Save
                   </button>
 
-                  {/* BOOKMARK POPOVER */}
                   {isBookmarkOpen && (
                     <div style={{
                       position: 'absolute',
@@ -390,7 +392,6 @@ export default function ArticlePage() {
                         )}
                       </div>
 
-                      {/* QUICK CREATE LIST */}
                       <form onSubmit={handleCreateList} style={{ borderTop: '1px solid #1f1f23', paddingTop: '0.6rem' }}>
                         <div style={{ display: 'flex', gap: '0.35rem' }}>
                           <input
@@ -479,15 +480,57 @@ export default function ArticlePage() {
         </header>
 
         {/* CONTENT BLOCK RENDERER */}
-        <article style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', lineHeight: 1.7 }}>
+        <article style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', lineHeight: 1.75 }}>
           {blocks.length === 0 ? (
             <p style={{ color: '#71717a' }}>No content available for this version.</p>
           ) : (
-            blocks.map((block) => {
+            blocks.map((block, i) => {
+              const key = block.id || i;
+
+              // 1. Heading block
               if (block.type === 'header') {
-                return <h2 key={block.id} style={{ fontSize: '1.5rem', marginTop: '1rem' }}>{block.data?.text || block.text}</h2>;
+                return (
+                  <h2 key={key} style={{ fontSize: '1.55rem', fontWeight: 600, marginTop: '1rem', color: '#fff' }}>
+                    {block.data?.text || block.text}
+                  </h2>
+                );
               }
-              return <p key={block.id} style={{ fontSize: '1rem', color: '#d4d4d8' }}>{block.data?.text || block.text}</p>;
+
+              // 2. Image block
+              if (block.type === 'image') {
+                const imgUrl = block.data?.url || block.url;
+                if (!imgUrl) return null;
+
+                return (
+                  <figure key={key} style={{ margin: '1rem 0', textAlign: 'center' }}>
+                    <img
+                      src={formatImageUrl(imgUrl)}
+                      alt={block.data?.caption || 'Article media illustration'}
+                      style={{
+                        maxWidth: '100%',
+                        borderRadius: 8,
+                        border: '1px solid #27272a',
+                        backgroundColor: '#0a0a0c',
+                        maxHeight: 520,
+                        objectFit: 'contain'
+                      }}
+                      onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                    />
+                    {block.data?.caption && (
+                      <figcaption style={{ fontSize: '0.825rem', color: '#a1a1aa', marginTop: '0.5rem', fontStyle: 'italic' }}>
+                        {block.data.caption}
+                      </figcaption>
+                    )}
+                  </figure>
+                );
+              }
+
+              // 3. Paragraph block (default)
+              return (
+                <p key={key} style={{ fontSize: '1.05rem', color: '#d4d4d8', margin: 0 }}>
+                  {block.data?.text || block.text}
+                </p>
+              );
             })
           )}
         </article>

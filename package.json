@@ -1,7 +1,9 @@
 {
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "axios": "^1.19.0",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.4.0",
     "react-router-dom": "^7.18.3"
   }
 }

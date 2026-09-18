@@ -5,6 +5,73 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import '../styles/auth.css';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+function ImageBlockPreview({ url, caption, formatImageUrl }) {
+  const [status, setStatus] = useState('loading'); // 'loading' | 'success' | 'error'
+
+  useEffect(() => {
+    setStatus('loading');
+  }, [url]);
+
+  if (!url) return null;
+
+  const fullUrl = formatImageUrl(url);
+
+  return (
+    <div style={{
+      marginTop: '0.65rem',
+      backgroundColor: '#050506',
+      padding: '0.75rem',
+      borderRadius: 6,
+      border: status === 'error' ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid #1f1f23',
+      textAlign: 'center'
+    }}>
+      {/* Verification Status Badge */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <span style={{ fontSize: '0.72rem', color: '#71717a' }}>Preview & Validation:</span>
+        {status === 'loading' && (
+          <span style={{ fontSize: '0.7rem', color: '#f59e0b' }}>⏳ Verifying link...</span>
+        )}
+        {status === 'success' && (
+          <span style={{ fontSize: '0.7rem', color: '#10b981', fontWeight: 600 }}>✓ Image verified</span>
+        )}
+        {status === 'error' && (
+          <span style={{ fontSize: '0.7rem', color: '#ef4444', fontWeight: 600 }}>⚠️ Failed to load</span>
+        )}
+      </div>
+
+      {/* Preview Image */}
+      <img
+        src={fullUrl}
+        alt={caption || 'Preview'}
+        onLoad={() => setStatus('success')}
+        onError={() => setStatus('error')}
+        style={{
+          maxWidth: '100%',
+          maxHeight: 280,
+          objectFit: 'contain',
+          borderRadius: 4,
+          display: status === 'error' ? 'none' : 'inline-block'
+        }}
+      />
+
+      {/* Fallback Warning if URL fails */}
+      {status === 'error' && (
+        <div style={{ padding: '1rem', color: '#ef4444', fontSize: '0.8rem' }}>
+          Unable to load image from this URL. Make sure it points directly to an image file (ending in .jpg, .png, .webp, or .gif) and allows public cross-origin viewing.
+        </div>
+      )}
+
+      {caption && status === 'success' && (
+        <span style={{ display: 'block', fontSize: '0.75rem', color: '#a1a1aa', marginTop: '0.4rem', fontStyle: 'italic' }}>
+          {caption}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function ArticleEditorPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -30,11 +97,12 @@ export default function ArticleEditorPage() {
   const [editSummary, setEditSummary] = useState('');
   const [templateType, setTemplateType] = useState('standard');
 
-  // Editor content states (Simple Block Editor format)
+  // Editor content states (Block Editor with Paragraphs, Headers, and Images)
   const [blocks, setBlocks] = useState([
     { id: '1', type: 'paragraph', data: { text: '' } }
   ]);
 
+  const [uploadingBlockId, setUploadingBlockId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState({ text: '', type: '' });
@@ -53,7 +121,6 @@ export default function ArticleEditorPage() {
         const loadedCats = catRes.categories || [];
         setAllCategories(loadedCats);
 
-        // Map managed roles onto directory wikis
         const managedMap = new Map();
         (managedRes.wikis || []).forEach((mw) => {
           managedMap.set(Number(mw.wiki_id), mw.user_role || 'author');
@@ -78,12 +145,10 @@ export default function ArticleEditorPage() {
             setBlocks(artRes.latestVersion.content.blocks);
           }
         } else {
-          // Determine initial default wiki space
           let defaultWiki = null;
           if (queryWikiId) {
             defaultWiki = loadedWikis.find((w) => String(w.wiki_id) === String(queryWikiId));
           } else {
-            // Prioritize user's owned wiki spaces first if available
             defaultWiki = loadedWikis.find((w) => Boolean(w.user_role)) || loadedWikis[0];
           }
 
@@ -104,7 +169,6 @@ export default function ArticleEditorPage() {
     initEditor();
   }, [queryArticleId, queryWikiId, user?.user_id]);
 
-  // Derive currently active wiki space
   const selectedWiki = useMemo(() => {
     return wikis.find((w) => String(w.wiki_id) === String(selectedWikiId)) || null;
   }, [wikis, selectedWikiId]);
@@ -115,7 +179,6 @@ export default function ArticleEditorPage() {
     return Boolean(selectedWiki.user_role);
   }, [selectedWiki, user]);
 
-  // Group wikis for modal display
   const { ownedWikis, otherWikis } = useMemo(() => {
     const isGlobal = ['owner', 'admin'].includes(user?.global_role);
     const owned = [];
@@ -172,11 +235,87 @@ export default function ArticleEditorPage() {
     );
   };
 
+  const handleImageBlockChange = (id, field, value) => {
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.id === id ? { ...b, data: { ...b.data, [field]: value } } : b
+      )
+    );
+  };
+
+  const getStoredToken = () => {
+    // 1. Check direct token keys
+    for (const key of ['token', 'accessToken', 'authToken', 'jwt', 'access_token']) {
+      const val = localStorage.getItem(key);
+      if (val) return val.replace(/^"|"$/g, '');
+    }
+
+    // 2. Check nested user object
+    try {
+      const rawUser = localStorage.getItem('user');
+      if (rawUser) {
+        const parsed = JSON.parse(rawUser);
+        if (parsed.token) return parsed.token;
+        if (parsed.accessToken) return parsed.accessToken;
+      }
+    } catch (_) {}
+
+    return null;
+  };
+
+  const handleImageFileUpload = async (blockId, file) => {
+    if (!file) return;
+    setUploadingBlockId(blockId);
+    setStatusMsg({ text: '', type: '' });
+
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = getStoredToken();
+
+    try {
+      const uploadUrl = getUploadEndpoint();
+
+      const res = await fetch(uploadUrl, {
+        method: 'POST',
+        credentials: 'include', // Transmits session cookies cross-origin
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: formData
+      });
+
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Server returned status ${res.status}: ${text.slice(0, 150)}`);
+      }
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'File upload failed');
+      }
+
+      // Save CDN url and media_id to block data
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId
+            ? { ...b, data: { ...b.data, url: data.url, media_id: data.media_id } }
+            : b
+        )
+      );
+    } catch (err) {
+      setStatusMsg({ text: err.message || 'Failed to upload image.', type: 'error' });
+    } finally {
+      setUploadingBlockId(null);
+    }
+  };
+
   const handleAddBlock = (type) => {
     const newBlock = {
       id: String(Date.now()),
       type,
-      data: { text: '' }
+      data: type === 'image' ? { url: '', caption: '' } : { text: '' }
     };
     setBlocks([...blocks, newBlock]);
   };
@@ -184,6 +323,11 @@ export default function ArticleEditorPage() {
   const handleRemoveBlock = (id) => {
     if (blocks.length === 1) return;
     setBlocks(blocks.filter((b) => b.id !== id));
+  };
+
+  const formatImageUrl = (url) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `${API_BASE}${url}`;
   };
 
   // Submit Handler
@@ -235,6 +379,12 @@ export default function ArticleEditorPage() {
     return <div style={{ color: '#71717a', padding: '2rem' }}>Loading editor workbench...</div>;
   }
 
+  const getUploadEndpoint = () => {
+    const raw = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const clean = raw.replace(/\/+$/, '');
+    return clean.endsWith('/api') ? `${clean}/media/upload` : `${clean}/api/media/upload`;
+  };
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
       <Navbar />
@@ -263,7 +413,6 @@ export default function ArticleEditorPage() {
                 </button>
               </div>
 
-              {/* Live Search Input */}
               <input
                 type="text"
                 autoFocus
@@ -275,10 +424,7 @@ export default function ArticleEditorPage() {
               />
             </header>
 
-            {/* Modal Scrollable List */}
             <div style={{ overflowY: 'auto', flex: 1, paddingRight: '0.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-              
-              {/* 1. Owned / Managed Spaces */}
               {filteredOwnedWikis.length > 0 && (
                 <div>
                   <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
@@ -305,9 +451,7 @@ export default function ArticleEditorPage() {
                         >
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                              <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>
-                                {w.title}
-                              </h4>
+                              <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>{w.title}</h4>
                               {w.category_name && (
                                 <span style={{ fontSize: '0.7rem', backgroundColor: '#27272a', color: '#a1a1aa', padding: '0.15rem 0.5rem', borderRadius: 9999 }}>
                                   {w.category_name}
@@ -322,14 +466,10 @@ export default function ArticleEditorPage() {
                             </p>
                           </div>
 
-                          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
-                            <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                              {w.article_count || 0} articles
-                            </span>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>{w.article_count || 0} articles</span>
                             {isSelected && (
-                              <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600 }}>
-                                ✓ Selected
-                              </span>
+                              <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600, display: 'block' }}>✓ Selected</span>
                             )}
                           </div>
                         </div>
@@ -339,7 +479,6 @@ export default function ArticleEditorPage() {
                 </div>
               )}
 
-              {/* 2. Other Community Spaces */}
               {filteredOtherWikis.length > 0 && (
                 <div>
                   <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
@@ -366,9 +505,7 @@ export default function ArticleEditorPage() {
                         >
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                              <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>
-                                {w.title}
-                              </h4>
+                              <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>{w.title}</h4>
                               {w.category_name && (
                                 <span style={{ fontSize: '0.7rem', backgroundColor: '#27272a', color: '#a1a1aa', padding: '0.15rem 0.5rem', borderRadius: 9999 }}>
                                   {w.category_name}
@@ -383,14 +520,10 @@ export default function ArticleEditorPage() {
                             </p>
                           </div>
 
-                          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
-                            <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                              {w.article_count || 0} articles
-                            </span>
+                          <div style={{ textAlign: 'right' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>{w.article_count || 0} articles</span>
                             {isSelected && (
-                              <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600 }}>
-                                ✓ Selected
-                              </span>
+                              <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600, display: 'block' }}>✓ Selected</span>
                             )}
                           </div>
                         </div>
@@ -475,7 +608,7 @@ export default function ArticleEditorPage() {
           </div>
         )}
 
-        {/* METADATA CONFIGURATION BAR WITH MODAL SELECTOR */}
+        {/* METADATA CONFIGURATION BAR */}
         <section style={{
           backgroundColor: '#0d0d0f',
           border: '1px solid #1f1f23',
@@ -486,7 +619,7 @@ export default function ArticleEditorPage() {
           gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
           gap: '1.25rem'
         }}>
-          {/* 1. Target Wiki Space Modal Trigger Card */}
+          {/* Target Wiki Space */}
           <div>
             <label style={{ fontSize: '0.75rem', color: '#a1a1aa', fontWeight: 600, display: 'block', marginBottom: '0.35rem' }}>
               Target Wiki Space *
@@ -544,7 +677,7 @@ export default function ArticleEditorPage() {
             </div>
           </div>
 
-          {/* 2. Global Category Selector */}
+          {/* Taxonomy Category */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
               <label style={{ fontSize: '0.75rem', color: '#a1a1aa', fontWeight: 600 }}>
@@ -588,14 +721,14 @@ export default function ArticleEditorPage() {
             </select>
           </div>
 
-          {/* 3. Edit Summary */}
+          {/* Edit Summary */}
           <div style={{ gridColumn: '1 / -1' }}>
             <label style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
               Revision Summary
             </label>
             <input
               type="text"
-              placeholder="e.g. Initial draft, expanded algorithm analysis, fixed typo..."
+              placeholder="e.g. Initial draft, expanded algorithm analysis, added diagrams..."
               value={editSummary}
               onChange={(e) => setEditSummary(e.target.value)}
               className="auth-input"
@@ -627,33 +760,103 @@ export default function ArticleEditorPage() {
         </div>
 
         {/* BLOCK EDITOR CANVAS */}
-        <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginBottom: '2rem' }}>
           {blocks.map((b, idx) => (
-            <div key={b.id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+            <div key={b.id} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
               <span style={{ fontSize: '0.75rem', color: '#52525b', width: 24, paddingTop: '0.6rem' }}>
                 #{idx + 1}
               </span>
 
-              {b.type === 'header' ? (
-                <input
-                  type="text"
-                  placeholder="Heading text..."
-                  value={b.data?.text || ''}
-                  onChange={(e) => handleBlockChange(b.id, e.target.value)}
-                  className="auth-input"
-                  style={{ fontSize: '1.25rem', fontWeight: 600 }}
-                />
-              ) : (
-                <textarea
-                  rows={3}
-                  placeholder="Write content paragraph (supports [[Wiki Link]] syntax)..."
-                  value={b.data?.text || ''}
-                  onChange={(e) => handleBlockChange(b.id, e.target.value)}
-                  className="auth-input"
-                  style={{ resize: 'vertical', lineHeight: 1.6 }}
-                />
+              {/* 1. Header Block */}
+              {b.type === 'header' && (
+                <div style={{ flex: 1 }}>
+                  <input
+                    type="text"
+                    placeholder="Heading text..."
+                    value={b.data?.text || ''}
+                    onChange={(e) => handleBlockChange(b.id, e.target.value)}
+                    className="auth-input"
+                    style={{ fontSize: '1.25rem', fontWeight: 600 }}
+                  />
+                </div>
               )}
 
+              {/* 2. Paragraph Block */}
+              {b.type === 'paragraph' && (
+                <div style={{ flex: 1 }}>
+                  <textarea
+                    rows={3}
+                    placeholder="Write content paragraph (supports [[Wiki Link]] syntax)..."
+                    value={b.data?.text || ''}
+                    onChange={(e) => handleBlockChange(b.id, e.target.value)}
+                    className="auth-input"
+                    style={{ resize: 'vertical', lineHeight: 1.6 }}
+                  />
+                </div>
+              )}
+
+              {/* 3. Image Media Block with Live URL Preview Validation */}
+              {b.type === 'image' && (
+                <div style={{
+                  flex: 1,
+                  backgroundColor: '#0d0d0f',
+                  border: '1px solid #27272a',
+                  borderRadius: 6,
+                  padding: '1rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.75rem'
+                }}>
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      placeholder="Paste image URL (https://... or /uploads/...)"
+                      value={b.data?.url || ''}
+                      onChange={(e) => handleImageBlockChange(b.id, 'url', e.target.value)}
+                      className="auth-input"
+                      style={{ flex: 1, minWidth: 220 }}
+                    />
+
+                    <label style={{
+                      backgroundColor: '#18181b',
+                      color: '#f4f4f5',
+                      border: '1px solid #3f3f46',
+                      borderRadius: 6,
+                      padding: '0.5rem 1rem',
+                      fontSize: '0.8rem',
+                      cursor: uploadingBlockId === b.id ? 'wait' : 'pointer',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {uploadingBlockId === b.id ? 'Uploading...' : '📁 Upload File'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={uploadingBlockId === b.id}
+                        onChange={(e) => handleImageFileUpload(b.id, e.target.files?.[0])}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Optional image caption..."
+                    value={b.data?.caption || ''}
+                    onChange={(e) => handleImageBlockChange(b.id, 'caption', e.target.value)}
+                    className="auth-input"
+                    style={{ fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                  />
+
+                  {/* Live URL / Upload Preview with Validation */}
+                  <ImageBlockPreview
+                    url={b.data?.url}
+                    caption={b.data?.caption}
+                    formatImageUrl={formatImageUrl}
+                  />
+                </div>
+              )}
+
+              {/* Remove block button */}
               <button
                 type="button"
                 onClick={() => handleRemoveBlock(b.id)}
@@ -663,7 +866,7 @@ export default function ArticleEditorPage() {
                   color: '#71717a',
                   cursor: 'pointer',
                   paddingTop: '0.5rem',
-                  fontSize: '0.9rem'
+                  fontSize: '0.95rem'
                 }}
                 title="Remove block"
               >
@@ -672,8 +875,8 @@ export default function ArticleEditorPage() {
             </div>
           ))}
 
-          {/* ADD BLOCK BUTTONS */}
-          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+          {/* ADD BLOCK ACTION BAR */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
             <button
               type="button"
               onClick={() => handleAddBlock('paragraph')}
@@ -703,6 +906,21 @@ export default function ArticleEditorPage() {
               }}
             >
               + Add Subheading
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAddBlock('image')}
+              style={{
+                backgroundColor: '#141417',
+                border: '1px dashed #a855f7',
+                color: '#c084fc',
+                borderRadius: 6,
+                padding: '0.45rem 0.85rem',
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }}
+            >
+              🖼️ + Add Image Block
             </button>
           </div>
         </section>

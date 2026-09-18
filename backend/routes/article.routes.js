@@ -16,6 +16,24 @@ function extractFirstParagraph(content) {
   return (p.data?.text || p.text || '').trim().slice(0, 300);
 }
 
+function extractFirstImage(content) {
+  if (!content) return null;
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return null;
+  const imgBlock = blocks.find((b) => b.type === 'image' && (b.data?.url || b.url));
+  return imgBlock ? (imgBlock.data?.url || imgBlock.url || null) : null;
+}
+
+function extractMediaIds(content) {
+  if (!content) return [];
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return [];
+  return blocks
+    .filter((b) => b.type === 'image' && b.data?.media_id)
+    .map((b) => Number(b.data.media_id))
+    .filter((id) => !isNaN(id) && id > 0);
+}
+
 // CREATE ARTICLE (POST /api/articles)
 router.post('/', authenticateToken, async (req, res) => {
   try {
@@ -35,7 +53,6 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(409).json({ success: false, message: 'An article with this title already exists in this wiki' });
     }
 
-    // Auto-inherit category_id from the parent wiki space if omitted
     const wikiInfo = await prisma.$queryRaw`
       SELECT category_id::INT AS category_id 
       FROM wiki_spaces 
@@ -52,6 +69,8 @@ router.post('/', authenticateToken, async (req, res) => {
     `;
     const canPublishDirectly = isGlobal || membership.length > 0;
     const excerpt = extractFirstParagraph(content);
+    const thumbnail = extractFirstImage(content);
+    const mediaIds = extractMediaIds(content);
 
     const result = await prisma.$transaction(async (tx) => {
       const articleRows = await tx.$queryRaw`
@@ -61,6 +80,7 @@ router.post('/', authenticateToken, async (req, res) => {
           title,
           slug,
           description,
+          thumbnail_url,
           template_type,
           is_published
         )
@@ -70,6 +90,7 @@ router.post('/', authenticateToken, async (req, res) => {
           ${title.trim()},
           ${slug},
           ${excerpt},
+          ${thumbnail},
           ${template_type},
           ${canPublishDirectly}
         )
@@ -97,6 +118,14 @@ router.post('/', authenticateToken, async (req, res) => {
           ${canPublishDirectly ? userId : null}
         );
       `;
+
+      for (const mId of mediaIds) {
+        await tx.$executeRaw`
+          INSERT INTO article_media (article_id, media_id)
+          VALUES (${article.article_id}, ${mId})
+          ON CONFLICT DO NOTHING;
+        `;
+      }
 
       return article;
     });
@@ -131,6 +160,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
         a.title,
         a.slug,
         COALESCE(a.description, '') AS description,
+        a.thumbnail_url,
         a.template_type,
         a.is_locked,
         w.title AS wiki_title,
@@ -215,33 +245,49 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
     `;
     const nextVersion = maxVer[0].next_num + 1;
 
-    await prisma.$executeRaw`
-      INSERT INTO article_versions (
-        article_id,
-        editor_id,
-        version_number,
-        content,
-        edit_summary,
-        is_published,
-        approver_id
-      )
-      VALUES (
-        ${articleId},
-        ${userId},
-        ${nextVersion},
-        ${JSON.stringify(content)}::jsonb,
-        ${edit_summary || 'Update version ' + nextVersion},
-        ${canPublishDirectly},
-        ${canPublishDirectly ? userId : null}
-      );
-    `;
-
-    if (canPublishDirectly) {
-      const excerpt = extractFirstParagraph(content);
-      await prisma.$executeRaw`
-        UPDATE articles SET description = ${excerpt} WHERE article_id = ${articleId};
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        INSERT INTO article_versions (
+          article_id,
+          editor_id,
+          version_number,
+          content,
+          edit_summary,
+          is_published,
+          approver_id
+        )
+        VALUES (
+          ${articleId},
+          ${userId},
+          ${nextVersion},
+          ${JSON.stringify(content)}::jsonb,
+          ${edit_summary || 'Update version ' + nextVersion},
+          ${canPublishDirectly},
+          ${canPublishDirectly ? userId : null}
+        );
       `;
-    }
+
+      if (canPublishDirectly) {
+        const excerpt = extractFirstParagraph(content);
+        const thumbnail = extractFirstImage(content);
+        const mediaIds = extractMediaIds(content);
+
+        await tx.$executeRaw`
+          UPDATE articles 
+          SET description = ${excerpt},
+              thumbnail_url = ${thumbnail}
+          WHERE article_id = ${articleId};
+        `;
+
+        for (const mId of mediaIds) {
+          await tx.$executeRaw`
+            INSERT INTO article_media (article_id, media_id)
+            VALUES (${articleId}, ${mId})
+            ON CONFLICT DO NOTHING;
+          `;
+        }
+      }
+    });
 
     res.status(201).json({
       success: true,
@@ -255,7 +301,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   }
 });
 
-// TOGGLE ARTICLE LOCK STATE (Authors, Co-Authors, and Global Admins)
+// TOGGLE ARTICLE LOCK STATE
 router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -301,7 +347,7 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE ARTICLE (Cascading cleanup)
+// DELETE ARTICLE
 router.delete('/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -329,6 +375,7 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
     }
 
     await prisma.$transaction([
+      prisma.$executeRaw`DELETE FROM article_media WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM reading_list_items WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM reports WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM article_versions WHERE article_id = ${articleId};`,
@@ -345,7 +392,7 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// GET ARTICLE BY SLUG (PUBLIC READER)
+// GET ARTICLE BY SLUG
 router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   try {
     const { wikiSlug, articleSlug } = req.params;
@@ -358,6 +405,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
         a.title,
         a.slug,
         COALESCE(a.description, '') AS description,
+        a.thumbnail_url,
         a.template_type,
         a.is_locked,
         a.is_published,
@@ -377,7 +425,6 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
 
     const article = articles[0];
 
-    // Determine viewer authoring role for UI control buttons
     let userRole = null;
     if (userId) {
       const membership = await prisma.$queryRaw`
@@ -528,22 +575,34 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
 
     if (action === 'approve') {
       const excerpt = extractFirstParagraph(ver.content);
+      const thumbnail = extractFirstImage(ver.content);
+      const mediaIds = extractMediaIds(ver.content);
 
-      await prisma.$transaction([
-        prisma.$executeRaw`
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
           UPDATE article_versions
           SET is_published = TRUE,
               approver_id = ${userId},
               approval_feedback = ${approval_feedback || 'Approved by author'}
           WHERE version_id = ${versionId};
-        `,
-        prisma.$executeRaw`
+        `;
+
+        await tx.$executeRaw`
           UPDATE articles
           SET is_published = TRUE,
-              description = ${excerpt}
+              description = ${excerpt},
+              thumbnail_url = ${thumbnail}
           WHERE article_id = ${ver.article_id};
-        `
-      ]);
+        `;
+
+        for (const mId of mediaIds) {
+          await tx.$executeRaw`
+            INSERT INTO article_media (article_id, media_id)
+            VALUES (${ver.article_id}, ${mId})
+            ON CONFLICT DO NOTHING;
+          `;
+        }
+      });
 
       return res.status(200).json({
         success: true,

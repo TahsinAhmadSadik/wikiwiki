@@ -15,6 +15,7 @@ import homeRoutes from './routes/home.routes.js';
 import searchRoutes from './routes/search.routes.js';
 import reportRoutes from './routes/report.routes.js';
 import readingListRoutes from './routes/readingList.routes.js';
+import categoryRoutes from './routes/category.routes.js';
 
 dotenv.config();
 const app = express();
@@ -42,6 +43,7 @@ app.use('/api/home', homeRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/reading-lists', readingListRoutes);
+app.use('/api/categories', categoryRoutes);
 
 
 app.get('/api/categories', async (req, res) => {

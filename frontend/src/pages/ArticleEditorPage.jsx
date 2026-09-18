@@ -1,188 +1,238 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import '../styles/auth.css';
 
 export default function ArticleEditorPage() {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const editArticleId = searchParams.get('articleId');
-  const urlWikiId = searchParams.get('wikiId');
+  const navigate = useNavigate();
+  const { user } = useAuth();
 
-  // Wiki selection state
-  const [wikiId, setWikiId] = useState('');
-  const [wikiTitle, setWikiTitle] = useState('');
-  const [wikiSlug, setWikiSlug] = useState('');
-  const [articleSlug, setArticleSlug] = useState('');
+  const queryWikiId = searchParams.get('wikiId');
+  const queryArticleId = searchParams.get('articleId');
 
-  // Wiki data lists
-  const [managedWikis, setManagedWikis] = useState([]);
-  const [allWikis, setAllWikis] = useState([]);
+  // Metadata states
+  const [wikis, setWikis] = useState([]);
+  const [allCategories, setAllCategories] = useState([]);
+  const [selectedWikiId, setSelectedWikiId] = useState(queryWikiId || '');
+  const [selectedCategoryId, setSelectedCategoryId] = useState('');
 
-  // Modal & Search state
+  // Wiki Selection Modal states
   const [isWikiModalOpen, setIsWikiModalOpen] = useState(false);
-  const [wikiSearchQuery, setWikiSearchQuery] = useState('');
+  const [wikiModalSearch, setWikiModalSearch] = useState('');
 
-  // Article form state
+  // Category quick filter
+  const [categoryFilter, setCategoryFilter] = useState('');
+
   const [title, setTitle] = useState('');
-  const [summary, setSummary] = useState('');
+  const [editSummary, setEditSummary] = useState('');
+  const [templateType, setTemplateType] = useState('standard');
+
+  // Editor content states (Simple Block Editor format)
   const [blocks, setBlocks] = useState([
-    { id: '1', type: 'header', text: 'Introduction' },
-    { id: '2', type: 'paragraph', text: 'Write your wiki article content here...' }
+    { id: '1', type: 'paragraph', data: { text: '' } }
   ]);
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState({ text: '', type: '' });
+  const [statusMsg, setStatusMsg] = useState({ text: '', type: '' });
+  const [isEditMode, setIsEditMode] = useState(false);
 
+  // 1. Initial Data Fetch
   useEffect(() => {
-    const initializeEditor = async () => {
-      setLoading(true);
+    const initEditor = async () => {
       try {
-        if (editArticleId) {
-          // Version Commit Mode: Load existing article details
-          const res = await api.get(`/articles/edit/${editArticleId}`);
-          const art = res.article;
-          setTitle(art.title);
-          setWikiId(art.wiki_id);
-          setWikiTitle(art.wiki_title);
-          setWikiSlug(art.wiki_slug);
-          setArticleSlug(art.slug);
+        const [dirRes, catRes, managedRes] = await Promise.all([
+          api.get('/wikis/directory'),
+          api.get('/categories'),
+          user ? api.get('/wikis/managed').catch(() => ({ wikis: [] })) : Promise.resolve({ wikis: [] })
+        ]);
 
-          if (res.latestVersion?.content?.blocks?.length > 0) {
-            setBlocks(
-              res.latestVersion.content.blocks.map((b) => ({
-                id: b.id || String(Math.random()),
-                type: b.type || 'paragraph',
-                text: b.data?.text || b.text || ''
-              }))
-            );
+        const loadedCats = catRes.categories || [];
+        setAllCategories(loadedCats);
+
+        // Map managed roles onto directory wikis
+        const managedMap = new Map();
+        (managedRes.wikis || []).forEach((mw) => {
+          managedMap.set(Number(mw.wiki_id), mw.user_role || 'author');
+        });
+
+        const loadedWikis = (dirRes.wikis || []).map((w) => ({
+          ...w,
+          user_role: managedMap.get(Number(w.wiki_id)) || null
+        }));
+        setWikis(loadedWikis);
+
+        if (queryArticleId) {
+          setIsEditMode(true);
+          const artRes = await api.get(`/articles/edit/${queryArticleId}`);
+          const art = artRes.article;
+          setTitle(art.title);
+          setSelectedWikiId(String(art.wiki_id));
+          setSelectedCategoryId(art.category_id ? String(art.category_id) : '');
+          setTemplateType(art.template_type || 'standard');
+
+          if (artRes.latestVersion?.content?.blocks) {
+            setBlocks(artRes.latestVersion.content.blocks);
           }
         } else {
-          // New Article Mode: Load managed wikis & all directory wikis in parallel
-          const [managedRes, dirRes] = await Promise.all([
-            api.get('/wikis/managed').catch(() => ({ wikis: [] })),
-            api.get('/wikis/directory').catch(() => ({ wikis: [] }))
-          ]);
+          // Determine initial default wiki space
+          let defaultWiki = null;
+          if (queryWikiId) {
+            defaultWiki = loadedWikis.find((w) => String(w.wiki_id) === String(queryWikiId));
+          } else {
+            // Prioritize user's owned wiki spaces first if available
+            defaultWiki = loadedWikis.find((w) => Boolean(w.user_role)) || loadedWikis[0];
+          }
 
-          const managedList = managedRes.wikis || [];
-          const dirList = dirRes.wikis || [];
-
-          setManagedWikis(managedList);
-          setAllWikis(dirList);
-
-          // Auto-select wiki if passed via URL, else default to first managed or first directory wiki
-          if (urlWikiId) {
-            const preselected = dirList.find((w) => String(w.wiki_id) === String(urlWikiId)) ||
-                                managedList.find((w) => String(w.wiki_id) === String(urlWikiId));
-            if (preselected) {
-              setWikiId(preselected.wiki_id);
-              setWikiTitle(preselected.title);
-              setWikiSlug(preselected.slug);
+          if (defaultWiki) {
+            setSelectedWikiId(String(defaultWiki.wiki_id));
+            if (defaultWiki.category_id) {
+              setSelectedCategoryId(String(defaultWiki.category_id));
             }
-          } else if (managedList.length > 0) {
-            setWikiId(managedList[0].wiki_id);
-            setWikiTitle(managedList[0].title);
-            setWikiSlug(managedList[0].slug);
-          } else if (dirList.length > 0) {
-            setWikiId(dirList[0].wiki_id);
-            setWikiTitle(dirList[0].title);
-            setWikiSlug(dirList[0].slug);
           }
         }
       } catch (err) {
-        setMsg({ text: err.data?.message || err.message, type: 'error' });
+        setStatusMsg({ text: err.data?.message || err.message, type: 'error' });
       } finally {
         setLoading(false);
       }
     };
 
-    initializeEditor();
-  }, [editArticleId, urlWikiId]);
+    initEditor();
+  }, [queryArticleId, queryWikiId, user?.user_id]);
 
-  const handleSelectWiki = (selected) => {
-    setWikiId(selected.wiki_id);
-    setWikiTitle(selected.title);
-    setWikiSlug(selected.slug);
+  // Derive currently active wiki space
+  const selectedWiki = useMemo(() => {
+    return wikis.find((w) => String(w.wiki_id) === String(selectedWikiId)) || null;
+  }, [wikis, selectedWikiId]);
+
+  const isAuthorOrCoAuthor = useMemo(() => {
+    if (!selectedWiki) return false;
+    if (['owner', 'admin'].includes(user?.global_role)) return true;
+    return Boolean(selectedWiki.user_role);
+  }, [selectedWiki, user]);
+
+  // Group wikis for modal display
+  const { ownedWikis, otherWikis } = useMemo(() => {
+    const isGlobal = ['owner', 'admin'].includes(user?.global_role);
+    const owned = [];
+    const other = [];
+
+    wikis.forEach((w) => {
+      if (Boolean(w.user_role) || isGlobal) {
+        owned.push(w);
+      } else {
+        other.push(w);
+      }
+    });
+
+    return { ownedWikis: owned, otherWikis: other };
+  }, [wikis, user]);
+
+  const filteredOwnedWikis = useMemo(() => {
+    if (!wikiModalSearch.trim()) return ownedWikis;
+    const q = wikiModalSearch.toLowerCase();
+    return ownedWikis.filter(
+      (w) => w.title.toLowerCase().includes(q) || (w.category_name && w.category_name.toLowerCase().includes(q))
+    );
+  }, [ownedWikis, wikiModalSearch]);
+
+  const filteredOtherWikis = useMemo(() => {
+    if (!wikiModalSearch.trim()) return otherWikis;
+    const q = wikiModalSearch.toLowerCase();
+    return otherWikis.filter(
+      (w) => w.title.toLowerCase().includes(q) || (w.category_name && w.category_name.toLowerCase().includes(q))
+    );
+  }, [otherWikis, wikiModalSearch]);
+
+  const filteredCategories = useMemo(() => {
+    if (!categoryFilter.trim()) return allCategories;
+    return allCategories.filter((c) =>
+      c.name.toLowerCase().includes(categoryFilter.toLowerCase()) ||
+      (c.parent_name && c.parent_name.toLowerCase().includes(categoryFilter.toLowerCase()))
+    );
+  }, [allCategories, categoryFilter]);
+
+  const handleWikiSelect = (w) => {
+    setSelectedWikiId(String(w.wiki_id));
+    if (!isEditMode && w.category_id) {
+      setSelectedCategoryId(String(w.category_id));
+    }
     setIsWikiModalOpen(false);
-    setWikiSearchQuery('');
+    setWikiModalSearch('');
   };
 
-  const addBlock = (type) => {
-    setBlocks((prev) => [...prev, { id: String(Date.now()), type, text: '' }]);
+  // Block Helpers
+  const handleBlockChange = (id, text) => {
+    setBlocks((prev) =>
+      prev.map((b) => (b.id === id ? { ...b, data: { ...b.data, text } } : b))
+    );
   };
 
-  const updateBlockText = (id, text) => {
-    setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, text } : b)));
+  const handleAddBlock = (type) => {
+    const newBlock = {
+      id: String(Date.now()),
+      type,
+      data: { text: '' }
+    };
+    setBlocks([...blocks, newBlock]);
   };
 
-  const removeBlock = (id) => {
-    setBlocks((prev) => prev.filter((b) => b.id !== id));
+  const handleRemoveBlock = (id) => {
+    if (blocks.length === 1) return;
+    setBlocks(blocks.filter((b) => b.id !== id));
   };
 
-  const handleSave = async (e) => {
+  // Submit Handler
+  const handlePublish = async (e) => {
     e.preventDefault();
-    if (!wikiId) {
-      setMsg({ text: 'Please select a target Wiki Space.', type: 'error' });
+    if (!title.trim()) {
+      setStatusMsg({ text: 'Article title is required.', type: 'error' });
+      return;
+    }
+    if (!selectedWikiId) {
+      setStatusMsg({ text: 'Please select a target Wiki Space.', type: 'error' });
       return;
     }
 
     setSaving(true);
-    setMsg({ text: '', type: '' });
-
-    const contentPayload = {
-      time: Date.now(),
-      blocks: blocks.map((b) => ({
-        id: b.id,
-        type: b.type,
-        data: { text: b.text }
-      }))
-    };
+    setStatusMsg({ text: '', type: '' });
 
     try {
-      if (editArticleId) {
-        const res = await api.post(`/articles/${editArticleId}/versions`, {
-          content: contentPayload,
-          edit_summary: summary || 'Revised article content'
+      if (isEditMode) {
+        const res = await api.post(`/articles/${queryArticleId}/versions`, {
+          content: { blocks },
+          edit_summary: editSummary.trim() || 'Updated content revision'
         });
-        setMsg({ text: res.message, type: 'success' });
-        setTimeout(() => navigate(`/wiki/${wikiSlug}/${articleSlug}`), 1500);
+        setStatusMsg({ text: res.message, type: 'success' });
+        setTimeout(() => navigate('/studio/library'), 1200);
       } else {
         const res = await api.post('/articles', {
-          wiki_id: Number(wikiId),
-          title,
-          content: contentPayload,
-          edit_summary: summary || 'Initial draft'
+          wiki_id: Number(selectedWikiId),
+          category_id: selectedCategoryId ? Number(selectedCategoryId) : null,
+          title: title.trim(),
+          template_type: templateType,
+          content: { blocks },
+          edit_summary: editSummary.trim() || 'Initial creation'
         });
-        setMsg({ text: res.message, type: 'success' });
-        setTimeout(() => navigate('/'), 1500);
+
+        setStatusMsg({ text: res.message, type: 'success' });
+        setTimeout(() => {
+          navigate(`/wiki/${selectedWiki?.slug || res.article.slug || selectedWikiId}`);
+        }, 1200);
       }
     } catch (err) {
-      setMsg({ text: err.data?.message || err.message, type: 'error' });
+      setStatusMsg({ text: err.data?.message || err.message || 'Failed to save article.', type: 'error' });
     } finally {
       setSaving(false);
     }
   };
 
-  // Search filtering
-  const query = wikiSearchQuery.toLowerCase().trim();
-  const filteredManaged = managedWikis.filter(
-    (w) => w.title.toLowerCase().includes(query) || (w.description && w.description.toLowerCase().includes(query))
-  );
-
-  const managedIds = new Set(managedWikis.map((w) => w.wiki_id));
-  const otherWikis = allWikis.filter((w) => !managedIds.has(w.wiki_id));
-  const filteredOther = otherWikis.filter(
-    (w) => w.title.toLowerCase().includes(query) || (w.description && w.description.toLowerCase().includes(query))
-  );
-
   if (loading) {
-    return (
-      <div style={{ color: '#71717a', padding: '2rem', backgroundColor: '#000', minHeight: '100vh' }}>
-        Loading editor canvas...
-      </div>
-    );
+    return <div style={{ color: '#71717a', padding: '2rem' }}>Loading editor workbench...</div>;
   }
 
   return (
@@ -191,157 +241,185 @@ export default function ArticleEditorPage() {
 
       {/* WIKI SELECTION MODAL */}
       {isWikiModalOpen && (
-        <div className="delete-modal-overlay" style={{ zIndex: 100 }}>
-          <div
-            className="delete-modal-card"
-            style={{
-              maxWidth: 620,
-              maxHeight: '85vh',
-              display: 'flex',
-              flexDirection: 'column',
-              backgroundColor: '#0d0d0f',
-              border: '1px solid #27272a'
-            }}
-          >
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 680, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
             <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '1rem', marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 style={{ margin: 0, fontSize: '1.2rem', color: '#fff' }}>Select Wiki Space</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>Select Target Wiki Space</h3>
+                  <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
+                    Choose where your article will be published or reviewed
+                  </span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setIsWikiModalOpen(false)}
-                  style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: '1.25rem' }}
+                  onClick={() => {
+                    setIsWikiModalOpen(false);
+                    setWikiModalSearch('');
+                  }}
+                  style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: '1.4rem' }}
                 >
                   ×
                 </button>
               </div>
-              <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: '0.35rem 0 0.75rem 0' }}>
-                Choose which wiki space this article belongs to.
-              </p>
 
+              {/* Live Search Input */}
               <input
                 type="text"
                 autoFocus
-                placeholder="Search wiki spaces by name or topic..."
-                value={wikiSearchQuery}
-                onChange={(e) => setWikiSearchQuery(e.target.value)}
+                placeholder="Search wiki spaces by title or topic..."
+                value={wikiModalSearch}
+                onChange={(e) => setWikiModalSearch(e.target.value)}
                 className="auth-input"
-                style={{ width: '100%', backgroundColor: '#050506' }}
+                style={{ backgroundColor: '#141417' }}
               />
             </header>
 
-            {/* SCROLLABLE WIKI DIRECTORY */}
+            {/* Modal Scrollable List */}
             <div style={{ overflowY: 'auto', flex: 1, paddingRight: '0.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               
-              {/* SECTION 1: USER'S MANAGED WIKIS */}
-              {filteredManaged.length > 0 && (
+              {/* 1. Owned / Managed Spaces */}
+              {filteredOwnedWikis.length > 0 && (
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem' }}>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      👑 Your Managed Spaces (Direct Publish)
-                    </span>
-                  </div>
-
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
+                    👑 Your Spaces ({filteredOwnedWikis.length}) — Direct Publishing
+                  </span>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {filteredManaged.map((w) => (
-                      <div
-                        key={w.wiki_id}
-                        onClick={() => handleSelectWiki(w)}
-                        style={{
-                          backgroundColor: String(wikiId) === String(w.wiki_id) ? '#1c1917' : '#141417',
-                          border: String(wikiId) === String(w.wiki_id) ? '1px solid #f59e0b' : '1px solid #27272a',
-                          padding: '0.85rem 1rem',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          transition: 'border 0.15s ease'
-                        }}
-                      >
-                        <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{w.title}</strong>
-                            <span style={{ fontSize: '0.65rem', backgroundColor: '#f59e0b20', color: '#f59e0b', border: '1px solid #f59e0b40', padding: '0.1rem 0.4rem', borderRadius: 4, textTransform: 'capitalize' }}>
-                              {w.user_role || 'Author'}
-                            </span>
+                    {filteredOwnedWikis.map((w) => {
+                      const isSelected = String(selectedWikiId) === String(w.wiki_id);
+                      return (
+                        <div
+                          key={w.wiki_id}
+                          onClick={() => handleWikiSelect(w)}
+                          style={{
+                            backgroundColor: isSelected ? 'rgba(16, 185, 129, 0.1)' : '#141417',
+                            border: isSelected ? '1px solid #10b981' : '1px solid #27272a',
+                            borderRadius: 6,
+                            padding: '0.85rem 1rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                              <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>
+                                {w.title}
+                              </h4>
+                              {w.category_name && (
+                                <span style={{ fontSize: '0.7rem', backgroundColor: '#27272a', color: '#a1a1aa', padding: '0.15rem 0.5rem', borderRadius: 9999 }}>
+                                  {w.category_name}
+                                </span>
+                              )}
+                              <span style={{ fontSize: '0.7rem', color: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.4rem', borderRadius: 4, textTransform: 'capitalize' }}>
+                                {w.user_role || 'Author'}
+                              </span>
+                            </div>
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#71717a', maxWidth: 440, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {w.description || 'No description provided'}
+                            </p>
                           </div>
-                          <p style={{ margin: '0.2rem 0 0 0', color: '#a1a1aa', fontSize: '0.8rem' }}>
-                            {w.description || 'No description provided'}
-                          </p>
+
+                          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                              {w.article_count || 0} articles
+                            </span>
+                            {isSelected && (
+                              <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600 }}>
+                                ✓ Selected
+                              </span>
+                            )}
+                          </div>
                         </div>
-                        {String(wikiId) === String(w.wiki_id) && (
-                          <span style={{ color: '#f59e0b', fontSize: '0.8rem', fontWeight: 600 }}>Selected ✓</span>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              {/* SECTION 2: ALL PUBLIC WIKIS */}
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem' }}>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#a1a1aa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    🌐 All Wiki Spaces (Contributor Proposal)
+              {/* 2. Other Community Spaces */}
+              {filteredOtherWikis.length > 0 && (
+                <div>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#a855f7', letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: '0.5rem' }}>
+                    🌐 Community Spaces ({filteredOtherWikis.length}) — Requires Author Confirmation
                   </span>
-                </div>
-
-                {filteredOther.length === 0 ? (
-                  <p style={{ color: '#71717a', fontSize: '0.85rem', margin: '0.5rem 0' }}>
-                    {query ? 'No matching wiki spaces found.' : 'No other public wikis available.'}
-                  </p>
-                ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                    {filteredOther.map((w) => (
-                      <div
-                        key={w.wiki_id}
-                        onClick={() => handleSelectWiki(w)}
-                        style={{
-                          backgroundColor: String(wikiId) === String(w.wiki_id) ? '#18181b' : '#0a0a0c',
-                          border: String(wikiId) === String(w.wiki_id) ? '1px solid #a855f7' : '1px solid #1f1f23',
-                          padding: '0.85rem 1rem',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          transition: 'border 0.15s ease'
-                        }}
-                      >
-                        <div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{w.title}</strong>
-                            {w.category_name && (
-                              <span style={{ fontSize: '0.65rem', backgroundColor: '#27272a', color: '#a1a1aa', padding: '0.1rem 0.4rem', borderRadius: 4 }}>
-                                {w.category_name}
+                    {filteredOtherWikis.map((w) => {
+                      const isSelected = String(selectedWikiId) === String(w.wiki_id);
+                      return (
+                        <div
+                          key={w.wiki_id}
+                          onClick={() => handleWikiSelect(w)}
+                          style={{
+                            backgroundColor: isSelected ? 'rgba(168, 85, 247, 0.1)' : '#141417',
+                            border: isSelected ? '1px solid #a855f7' : '1px solid #27272a',
+                            borderRadius: 6,
+                            padding: '0.85rem 1rem',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            transition: 'all 0.15s ease'
+                          }}
+                        >
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                              <h4 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>
+                                {w.title}
+                              </h4>
+                              {w.category_name && (
+                                <span style={{ fontSize: '0.7rem', backgroundColor: '#27272a', color: '#a1a1aa', padding: '0.15rem 0.5rem', borderRadius: 9999 }}>
+                                  {w.category_name}
+                                </span>
+                              )}
+                              <span style={{ fontSize: '0.7rem', color: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.15)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>
+                                Public
+                              </span>
+                            </div>
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#71717a', maxWidth: 440, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {w.description || 'No description provided'}
+                            </p>
+                          </div>
+
+                          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+                            <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                              {w.article_count || 0} articles
+                            </span>
+                            {isSelected && (
+                              <span style={{ fontSize: '0.75rem', color: '#c084fc', fontWeight: 600 }}>
+                                ✓ Selected
                               </span>
                             )}
                           </div>
-                          <p style={{ margin: '0.2rem 0 0 0', color: '#71717a', fontSize: '0.8rem' }}>
-                            {w.description || 'A collaborative knowledge space.'}
-                          </p>
                         </div>
-                        {String(wikiId) === String(w.wiki_id) && (
-                          <span style={{ color: '#a855f7', fontSize: '0.8rem', fontWeight: 600 }}>Selected ✓</span>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
+              {filteredOwnedWikis.length === 0 && filteredOtherWikis.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#71717a' }}>
+                  No wiki spaces match "{wikiModalSearch}".
+                </div>
+              )}
             </div>
 
-            <footer style={{ borderTop: '1px solid #1f1f23', paddingTop: '0.75rem', marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+            <footer style={{ borderTop: '1px solid #1f1f23', paddingTop: '1rem', marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
               <button
                 type="button"
-                onClick={() => setIsWikiModalOpen(false)}
+                onClick={() => {
+                  setIsWikiModalOpen(false);
+                  setWikiModalSearch('');
+                }}
                 style={{
                   backgroundColor: '#18181b',
-                  color: '#fff',
+                  color: '#a1a1aa',
                   border: '1px solid #27272a',
-                  padding: '0.45rem 1rem',
                   borderRadius: 6,
+                  padding: '0.45rem 1.25rem',
                   cursor: 'pointer',
                   fontSize: '0.85rem'
                 }}
@@ -353,164 +431,281 @@ export default function ArticleEditorPage() {
         </div>
       )}
 
-      {/* MAIN EDITOR FORM */}
-      <main style={{ maxWidth: 850, margin: '2rem auto', padding: '0 1.5rem' }}>
-        <header style={{ marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: 0 }}>
-            {editArticleId ? `Edit Article: ${title}` : 'Create Wiki Article'}
-          </h1>
-          <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: '0.35rem 0 0 0' }}>
-            {editArticleId 
-              ? 'Your modifications will be saved as a new version. Authors and Admins publish immediately; contributors submit for review.' 
-              : 'Compose a new article in any chosen wiki space.'}
-          </p>
+      <main style={{ maxWidth: 960, margin: '2rem auto', padding: '0 1.5rem' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid #1f1f23', paddingBottom: '1rem' }}>
+          <div>
+            <h1 style={{ fontSize: '1.6rem', fontWeight: 600, margin: 0 }}>
+              {isEditMode ? 'Edit Article Revision' : 'Write New Article'}
+            </h1>
+            <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
+              Publish verified documentation directly to a collaborative wiki space.
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <Link
+              to="/studio/library"
+              style={{
+                backgroundColor: 'transparent',
+                border: '1px solid #27272a',
+                color: '#a1a1aa',
+                padding: '0.5rem 1rem',
+                borderRadius: 6,
+                fontSize: '0.85rem',
+                textDecoration: 'none'
+              }}
+            >
+              Cancel
+            </Link>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={handlePublish}
+              className="auth-btn"
+              style={{ width: 'auto', padding: '0.5rem 1.25rem' }}
+            >
+              {saving ? 'Publishing...' : isEditMode ? 'Commit Revision' : 'Publish Article'}
+            </button>
+          </div>
         </header>
 
-        {msg.text && <div className={`auth-alert ${msg.type}`} style={{ marginBottom: '1.25rem' }}>{msg.text}</div>}
+        {statusMsg.text && (
+          <div className={`auth-alert ${statusMsg.type}`} style={{ marginBottom: '1.5rem' }}>
+            {statusMsg.text}
+          </div>
+        )}
 
-        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            {/* WIKI SELECTOR TRIGGER */}
-            <div style={{ flex: 1, minWidth: 260 }}>
-              <label style={{ fontSize: '0.8rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
-                Wiki Space *
-              </label>
+        {/* METADATA CONFIGURATION BAR WITH MODAL SELECTOR */}
+        <section style={{
+          backgroundColor: '#0d0d0f',
+          border: '1px solid #1f1f23',
+          borderRadius: 8,
+          padding: '1.25rem',
+          marginBottom: '2rem',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gap: '1.25rem'
+        }}>
+          {/* 1. Target Wiki Space Modal Trigger Card */}
+          <div>
+            <label style={{ fontSize: '0.75rem', color: '#a1a1aa', fontWeight: 600, display: 'block', marginBottom: '0.35rem' }}>
+              Target Wiki Space *
+            </label>
 
-              {editArticleId ? (
-                <input
-                  type="text"
-                  disabled
-                  value={wikiTitle}
-                  className="auth-input"
-                  style={{ opacity: 0.6 }}
-                />
+            <div style={{
+              backgroundColor: '#141417',
+              border: '1px solid #27272a',
+              borderRadius: 6,
+              padding: '0.65rem 0.9rem',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              minHeight: 46
+            }}>
+              {selectedWiki ? (
+                <div style={{ overflow: 'hidden', paddingRight: '0.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.95rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      📖 {selectedWiki.title}
+                    </span>
+                    {isAuthorOrCoAuthor ? (
+                      <span style={{ fontSize: '0.68rem', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '0.1rem 0.4rem', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                        ✓ Direct Publish
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '0.68rem', backgroundColor: 'rgba(245, 158, 11, 0.12)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '0.1rem 0.4rem', borderRadius: 4, whiteSpace: 'nowrap' }}>
+                        Review Queue
+                      </span>
+                    )}
+                  </div>
+                </div>
               ) : (
+                <span style={{ color: '#71717a', fontSize: '0.85rem' }}>No wiki space selected</span>
+              )}
+
+              {!isEditMode && (
                 <button
                   type="button"
                   onClick={() => setIsWikiModalOpen(true)}
                   style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    backgroundColor: '#0d0d0f',
-                    border: '1px solid #27272a',
-                    borderRadius: 6,
-                    padding: '0.55rem 0.85rem',
-                    color: wikiTitle ? '#fff' : '#71717a',
+                    backgroundColor: '#1f1f23',
+                    color: '#f4f4f5',
+                    border: '1px solid #3f3f46',
+                    borderRadius: 4,
+                    padding: '0.35rem 0.75rem',
+                    fontSize: '0.78rem',
                     cursor: 'pointer',
-                    fontSize: '0.9rem',
-                    textAlign: 'left'
+                    whiteSpace: 'nowrap'
                   }}
                 >
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {wikiTitle ? `📖 ${wikiTitle}` : 'Select a Wiki Space...'}
-                  </span>
-                  <span style={{ fontSize: '0.75rem', color: '#a855f7', marginLeft: '0.5rem', whiteSpace: 'nowrap' }}>
-                    Change ↗
-                  </span>
+                  {selectedWiki ? 'Change ⇄' : 'Select Wiki →'}
                 </button>
               )}
             </div>
-
-            {/* ARTICLE TITLE */}
-            <div style={{ flex: 2, minWidth: 280 }}>
-              <label style={{ fontSize: '0.8rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>Article Title *</label>
-              <input
-                type="text"
-                required
-                disabled={Boolean(editArticleId)}
-                placeholder="Title of the article"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="auth-input"
-                style={editArticleId ? { opacity: 0.6 } : {}}
-              />
-            </div>
           </div>
 
+          {/* 2. Global Category Selector */}
           <div>
-            <label style={{ fontSize: '0.8rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>Edit Summary *</label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+              <label style={{ fontSize: '0.75rem', color: '#a1a1aa', fontWeight: 600 }}>
+                Taxonomy Category
+              </label>
+              {allCategories.length > 3 && (
+                <input
+                  type="text"
+                  placeholder="Filter topics..."
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  style={{
+                    backgroundColor: '#18181b',
+                    border: '1px solid #27272a',
+                    borderRadius: 4,
+                    color: '#fff',
+                    fontSize: '0.7rem',
+                    padding: '0.15rem 0.4rem',
+                    width: 110
+                  }}
+                />
+              )}
+            </div>
+
+            <select
+              value={selectedCategoryId}
+              onChange={(e) => setSelectedCategoryId(e.target.value)}
+              className="auth-input"
+              style={{ backgroundColor: '#141417', height: 46 }}
+            >
+              <option value="">-- Select Category --</option>
+              {filteredCategories.length === 0 ? (
+                <option value="" disabled>No categories match filter</option>
+              ) : (
+                filteredCategories.map((c) => (
+                  <option key={c.category_id} value={c.category_id}>
+                    {c.parent_id ? `↳ ${c.name} (${c.parent_name})` : `📁 ${c.name}`}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          {/* 3. Edit Summary */}
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
+              Revision Summary
+            </label>
             <input
               type="text"
-              required={Boolean(editArticleId)}
-              placeholder={editArticleId ? "Describe the changes made in this version..." : "e.g., Initial creation"}
-              value={summary}
-              onChange={(e) => setSummary(e.target.value)}
+              placeholder="e.g. Initial draft, expanded algorithm analysis, fixed typo..."
+              value={editSummary}
+              onChange={(e) => setEditSummary(e.target.value)}
               className="auth-input"
             />
           </div>
+        </section>
 
-          {/* BLOCK CANVAS */}
-          <div style={{ border: '1px solid #1f1f23', borderRadius: 8, padding: '1.5rem', backgroundColor: '#0d0d0f' }}>
-            <h3 style={{ fontSize: '0.9rem', color: '#a1a1aa', textTransform: 'uppercase', margin: '0 0 1rem 0' }}>
-              Content Blocks
-            </h3>
+        {/* ARTICLE TITLE */}
+        <div style={{ marginBottom: '1.5rem' }}>
+          <input
+            type="text"
+            disabled={isEditMode}
+            placeholder="Article Title..."
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            style={{
+              width: '100%',
+              backgroundColor: 'transparent',
+              border: 'none',
+              borderBottom: '2px solid #27272a',
+              color: '#fff',
+              fontSize: '2rem',
+              fontWeight: 700,
+              padding: '0.5rem 0',
+              outline: 'none',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
-              {blocks.map((block) => (
-                <div key={block.id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-                  <span style={{ fontSize: '0.75rem', color: '#71717a', paddingTop: '0.5rem', width: 60 }}>
-                    {block.type.toUpperCase()}
-                  </span>
+        {/* BLOCK EDITOR CANVAS */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
+          {blocks.map((b, idx) => (
+            <div key={b.id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: '0.75rem', color: '#52525b', width: 24, paddingTop: '0.6rem' }}>
+                #{idx + 1}
+              </span>
 
-                  {block.type === 'header' ? (
-                    <input
-                      type="text"
-                      className="auth-input"
-                      value={block.text}
-                      onChange={(e) => updateBlockText(block.id, e.target.value)}
-                      placeholder="Header title..."
-                      style={{ fontWeight: 600, fontSize: '1.1rem' }}
-                    />
-                  ) : (
-                    <textarea
-                      className="auth-input"
-                      value={block.text}
-                      onChange={(e) => updateBlockText(block.id, e.target.value)}
-                      placeholder="Paragraph text..."
-                      style={{ minHeight: 75, resize: 'vertical' }}
-                    />
-                  )}
+              {b.type === 'header' ? (
+                <input
+                  type="text"
+                  placeholder="Heading text..."
+                  value={b.data?.text || ''}
+                  onChange={(e) => handleBlockChange(b.id, e.target.value)}
+                  className="auth-input"
+                  style={{ fontSize: '1.25rem', fontWeight: 600 }}
+                />
+              ) : (
+                <textarea
+                  rows={3}
+                  placeholder="Write content paragraph (supports [[Wiki Link]] syntax)..."
+                  value={b.data?.text || ''}
+                  onChange={(e) => handleBlockChange(b.id, e.target.value)}
+                  className="auth-input"
+                  style={{ resize: 'vertical', lineHeight: 1.6 }}
+                />
+              )}
 
-                  <button
-                    type="button"
-                    onClick={() => removeBlock(block.id)}
-                    style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '1.1rem' }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 type="button"
-                onClick={() => addBlock('paragraph')}
-                style={{ background: '#18181b', color: '#fff', border: '1px solid #27272a', padding: '0.35rem 0.75rem', borderRadius: 4, fontSize: '0.8rem', cursor: 'pointer' }}
+                onClick={() => handleRemoveBlock(b.id)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#71717a',
+                  cursor: 'pointer',
+                  paddingTop: '0.5rem',
+                  fontSize: '0.9rem'
+                }}
+                title="Remove block"
               >
-                + Add Paragraph
-              </button>
-              <button
-                type="button"
-                onClick={() => addBlock('header')}
-                style={{ background: '#18181b', color: '#fff', border: '1px solid #27272a', padding: '0.35rem 0.75rem', borderRadius: 4, fontSize: '0.8rem', cursor: 'pointer' }}
-              >
-                + Add Header
+                ✕
               </button>
             </div>
+          ))}
+
+          {/* ADD BLOCK BUTTONS */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              onClick={() => handleAddBlock('paragraph')}
+              style={{
+                backgroundColor: '#141417',
+                border: '1px dashed #3f3f46',
+                color: '#d4d4d8',
+                borderRadius: 6,
+                padding: '0.45rem 0.85rem',
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }}
+            >
+              + Add Paragraph
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAddBlock('header')}
+              style={{
+                backgroundColor: '#141417',
+                border: '1px dashed #3f3f46',
+                color: '#d4d4d8',
+                borderRadius: 6,
+                padding: '0.45rem 0.85rem',
+                fontSize: '0.8rem',
+                cursor: 'pointer'
+              }}
+            >
+              + Add Subheading
+            </button>
           </div>
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="auth-btn"
-            style={{ width: 'auto', alignSelf: 'flex-start', padding: '0.65rem 1.5rem' }}
-          >
-            {saving ? 'Saving...' : editArticleId ? 'Commit New Version' : 'Submit & Save Article'}
-          </button>
-        </form>
+        </section>
       </main>
     </div>
   );

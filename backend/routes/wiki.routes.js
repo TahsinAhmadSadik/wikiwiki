@@ -427,4 +427,94 @@ router.post('/categories/:categoryId/follow', authenticateToken, async (req, res
   }
 });
 
+// GET ELIGIBLE CATEGORIES FOR A WIKI (Recursive CTE from wiki anchor category down to leaf subcategories)
+router.get('/:wikiId/categories', optionalAuth, async (req, res) => {
+  try {
+    const wikiId = Number(req.params.wikiId);
+
+    const wiki = await prisma.$queryRaw`
+      SELECT wiki_id::INT AS wiki_id, category_id::INT AS category_id
+      FROM wiki_spaces
+      WHERE wiki_id = ${wikiId}
+      LIMIT 1;
+    `;
+
+    if (wiki.length === 0) {
+      return res.status(404).json({ success: false, message: 'Wiki space not found' });
+    }
+
+    const baseCategoryId = wiki[0].category_id;
+
+    let categories = [];
+    if (baseCategoryId) {
+      categories = await prisma.$queryRaw`
+        WITH RECURSIVE CategoryBranch AS (
+          SELECT 
+            c.category_id::INT AS category_id,
+            c.name,
+            c.parent_id::INT AS parent_id,
+            0 AS depth
+          FROM categories c
+          WHERE c.category_id = ${baseCategoryId}
+
+          UNION ALL
+
+          SELECT 
+            c.category_id::INT AS category_id,
+            c.name,
+            c.parent_id::INT AS parent_id,
+            cb.depth + 1 AS depth
+          FROM categories c
+          INNER JOIN CategoryBranch cb ON c.parent_id = cb.category_id
+        )
+        SELECT * FROM CategoryBranch ORDER BY depth ASC, name ASC;
+      `;
+    } else {
+      // Fallback: If wiki space has no category assigned yet, list all categories
+      categories = await prisma.$queryRaw`
+        SELECT 
+          c.category_id::INT AS category_id,
+          c.name,
+          c.parent_id::INT AS parent_id,
+          0 AS depth
+        FROM categories c
+        ORDER BY c.name ASC;
+      `;
+    }
+
+    res.status(200).json({
+      success: true,
+      baseCategoryId,
+      categories
+    });
+  } catch (error) {
+    console.error('Fetch eligible categories error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load eligible categories' });
+  }
+});
+
+
+router.get('/directory', async (req, res) => {
+  try {
+    const wikis = await prisma.$queryRaw`
+      SELECT 
+        w.wiki_id::INT AS wiki_id,
+        w.title,
+        w.slug,
+        w.description,
+        w.category_id::INT AS category_id,
+        w.total_views::INT AS total_views,
+        c.name AS category_name,
+        (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
+      FROM wiki_spaces w
+      LEFT JOIN categories c ON w.category_id = c.category_id
+      ORDER BY w.title ASC;
+    `;
+    res.status(200).json({ success: true, wikis });
+  } catch (error) {
+    console.error('Fetch directory error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load wiki directory' });
+  }
+});
+
 export default router;

@@ -13,6 +13,7 @@ export default function AdminPanelPage() {
   const [globalStats, setGlobalStats] = useState(null);
   const [pendingReviews, setPendingReviews] = useState([]);
   const [reports, setReports] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [reviewActionMsg, setReviewActionMsg] = useState({ text: '', type: '' });
@@ -23,6 +24,12 @@ export default function AdminPanelPage() {
 
   // Demerit selection per report
   const [demeritSelections, setDemeritSelections] = useState({});
+
+  // Category creation form state
+  const [newCatName, setNewCatName] = useState('');
+  const [parentCatId, setParentCatId] = useState('');
+  const [catStatus, setCatStatus] = useState({ text: '', type: '' });
+  const [creatingCat, setCreatingCat] = useState(false);
 
   // Co-author form
   const [selectedWikiId, setSelectedWikiId] = useState('');
@@ -38,15 +45,17 @@ export default function AdminPanelPage() {
 
   const fetchAdminData = async () => {
     try {
-      const [wikisRes, pendingRes, reportRes] = await Promise.all([
+      const [wikisRes, pendingRes, reportRes, catRes] = await Promise.all([
         api.get('/wikis/managed'),
         api.get('/articles/pending-reviews'),
-        api.get('/reports/pending')
+        api.get('/reports/pending'),
+        api.get('/categories')
       ]);
 
       setWikis(wikisRes.wikis || []);
       setPendingReviews(pendingRes.pending || []);
       setReports(reportRes.reports || []);
+      setCategories(catRes.categories || []);
 
       if (isGlobalAdmin) {
         const statsRes = await api.get('/admin/stats');
@@ -92,6 +101,33 @@ export default function AdminPanelPage() {
       setReports((prev) => prev.filter((r) => r.report_id !== reportId));
     } catch (err) {
       setReviewActionMsg({ text: err.data?.message || err.message, type: 'error' });
+    }
+  };
+
+  const handleCreateCategory = async (e) => {
+    e.preventDefault();
+    if (!newCatName.trim()) return;
+
+    setCreatingCat(true);
+    setCatStatus({ text: '', type: '' });
+
+    try {
+      const res = await api.post('/categories', {
+        name: newCatName.trim(),
+        parent_id: parentCatId ? Number(parentCatId) : null
+      });
+
+      setCatStatus({ text: res.message, type: 'success' });
+      setNewCatName('');
+      setParentCatId('');
+
+      // Refresh categories list
+      const updatedCats = await api.get('/categories');
+      setCategories(updatedCats.categories || []);
+    } catch (err) {
+      setCatStatus({ text: err.data?.message || err.message, type: 'error' });
+    } finally {
+      setCreatingCat(false);
     }
   };
 
@@ -316,7 +352,7 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* 2. MODERATION REPORTS QUEUE (CALLS STORED PROCEDURE) */}
+        {/* 2. MODERATION REPORTS QUEUE */}
         <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #ef444430', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
@@ -357,7 +393,6 @@ export default function AdminPanelPage() {
                       </span>
                     </div>
 
-                    {/* ACTIONS: PROCEDURE DISPATCH */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <select
                         value={demeritSelections[rep.report_id] || '0'}
@@ -432,7 +467,100 @@ export default function AdminPanelPage() {
           </div>
         )}
 
-        {/* 4. SITE OWNER CONTROLS */}
+        {/* 4. TAXONOMY & CATEGORY TREE (GLOBAL ADMINS ONLY) */}
+        {isGlobalAdmin && (
+          <section style={{
+            backgroundColor: '#0d0d0f',
+            border: '1px solid #1f1f23',
+            borderRadius: 8,
+            padding: '1.5rem',
+            marginBottom: '2.5rem'
+          }}>
+            <h2 style={{ fontSize: '1.25rem', margin: '0 0 0.5rem 0' }}>Taxonomy & Category Tree</h2>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: '0 0 1.25rem 0' }}>
+              Define global root topics or nest subcategories to organize wiki spaces and articles.
+            </p>
+
+            {catStatus.text && (
+              <div className={`auth-alert ${catStatus.type}`} style={{ marginBottom: '1rem' }}>
+                {catStatus.text}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateCategory} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr)) auto', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '1.5rem' }}>
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
+                  Category Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Graph Theory, Quantum Computing"
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  className="auth-input"
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
+                  Parent Category (Optional)
+                </label>
+                <select
+                  value={parentCatId}
+                  onChange={(e) => setParentCatId(e.target.value)}
+                  className="auth-input"
+                  style={{ backgroundColor: '#141417' }}
+                >
+                  <option value="">None (Top-Level Root Topic)</option>
+                  {categories.map((c) => (
+                    <option key={c.category_id} value={c.category_id}>
+                      {c.parent_name ? `↳ Child of ${c.parent_name}: ${c.name}` : `📁 ${c.name}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={creatingCat}
+                className="auth-btn"
+                style={{ width: 'auto', padding: '0.6rem 1.25rem', height: 42 }}
+              >
+                {creatingCat ? 'Adding...' : '+ Add Category'}
+              </button>
+            </form>
+
+            {/* Existing Categories Pill Grid */}
+            <div style={{ borderTop: '1px solid #1f1f23', paddingTop: '1rem' }}>
+              <span style={{ fontSize: '0.75rem', color: '#71717a', textTransform: 'uppercase', display: 'block', marginBottom: '0.75rem' }}>
+                Registered Taxonomy Topics ({categories.length})
+              </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {categories.map((c) => (
+                  <span
+                    key={c.category_id}
+                    style={{
+                      fontSize: '0.8rem',
+                      backgroundColor: '#141417',
+                      border: '1px solid #27272a',
+                      color: c.parent_id ? '#c084fc' : '#fff',
+                      padding: '0.3rem 0.75rem',
+                      borderRadius: 6
+                    }}
+                  >
+                    {c.parent_id ? `↳ ${c.name}` : `📁 ${c.name}`}
+                    <span style={{ fontSize: '0.7rem', color: '#71717a', marginLeft: '0.4rem' }}>
+                      ({c.article_count || 0})
+                    </span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* 5. SITE OWNER CONTROLS */}
         {isOwner && (
           <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #a855f750', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
             <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0', color: '#a855f7' }}>👑 Site Owner Controls</h2>
@@ -459,7 +587,7 @@ export default function AdminPanelPage() {
           </section>
         )}
 
-        {/* 5. YOUR MANAGED WIKIS */}
+        {/* 6. YOUR MANAGED WIKIS */}
         <section style={{ marginBottom: '2.5rem' }}>
           <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Your Managed Wikis</h2>
           {wikis.length === 0 ? (
@@ -500,7 +628,7 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* 6. ADD CO-AUTHOR */}
+        {/* 7. ADD CO-AUTHOR */}
         {wikis.length > 0 && (
           <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.5rem', borderRadius: 8 }}>
             <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0' }}>Add Co-Author to a Wiki</h2>

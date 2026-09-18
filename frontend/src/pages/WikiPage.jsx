@@ -16,6 +16,10 @@ export default function WikiPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Deletion Modal State
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   const fetchWikiHub = async () => {
     try {
       const res = await api.get(`/wikis/public/${wikiSlug}`);
@@ -57,6 +61,18 @@ export default function WikiPage() {
     }
   };
 
+  const handleDeleteWiki = async () => {
+    setDeleting(true);
+    try {
+      await api.delete(`/wikis/${wiki.wiki_id}`);
+      navigate('/');
+    } catch (err) {
+      alert(err.data?.message || err.message || 'Failed to delete wiki space');
+      setDeleting(false);
+      setIsDeleteModalOpen(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#71717a', padding: '2rem' }}>
@@ -77,9 +93,60 @@ export default function WikiPage() {
     );
   }
 
+  const isGlobal = ['owner', 'admin'].includes(user?.global_role);
+  const isPrimaryAuthor = wiki.userRole === 'author' || wiki.creator_id === user?.user_id;
+  const canDeleteWiki = isGlobal || isPrimaryAuthor;
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
       <Navbar />
+
+      {/* CONFIRM DELETE WIKI MODAL */}
+      {isDeleteModalOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 480 }}>
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', color: '#ef4444' }}>
+              Delete Entire Wiki Space?
+            </h3>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
+              Are you sure you want to delete <strong>"{wiki.title}"</strong>? This will permanently delete all <strong>{wiki.article_count} published articles</strong>, versions, revision records, bookmarks, and member associations in this space. This action cannot be reversed.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setIsDeleteModalOpen(false)}
+                style={{
+                  backgroundColor: 'transparent',
+                  color: '#a1a1aa',
+                  border: '1px solid #27272a',
+                  padding: '0.45rem 1rem',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={handleDeleteWiki}
+                className="auth-btn"
+                style={{
+                  width: 'auto',
+                  backgroundColor: '#ef4444',
+                  borderColor: '#ef4444',
+                  padding: '0.45rem 1.25rem'
+                }}
+              >
+                {deleting ? 'Deleting Space...' : 'Yes, Delete Space'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main style={{ maxWidth: 1000, margin: '2rem auto', padding: '0 1.5rem' }}>
         {/* BANNER HEADER */}
@@ -117,7 +184,7 @@ export default function WikiPage() {
             </div>
 
             {/* ACTION CONTROLS */}
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 onClick={handleToggleWikiFollow}
@@ -142,6 +209,26 @@ export default function WikiPage() {
               >
                 + New Article
               </Link>
+
+              {/* DELETE WIKI SPACE (AUTHOR / ADMIN ONLY) */}
+              {canDeleteWiki && (
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteModalOpen(true)}
+                  style={{
+                    backgroundColor: 'transparent',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    color: '#ef4444',
+                    borderRadius: 6,
+                    padding: '0.55rem 0.85rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="Delete Wiki Space"
+                >
+                  🗑️
+                </button>
+              )}
             </div>
           </div>
 
@@ -206,7 +293,7 @@ export default function WikiPage() {
                       </Link>
                     </h3>
 
-                    {/* 2-Line Ellipsis Snippet */}
+                    {/* 2-line description clamp */}
                     <p
                       style={{
                         margin: '0 0 0.5rem 0',

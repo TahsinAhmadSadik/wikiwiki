@@ -204,6 +204,7 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
         w.description,
         w.total_views::INT AS total_views,
         w.category_id::INT AS category_id,
+        w.creator_id::INT AS creator_id,
         w.created_at,
         c.name AS category_name,
         (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count,
@@ -244,7 +245,6 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
       }
     }
 
-    // Includes COALESCE(a.description, '') for snippet display
     const articles = await prisma.$queryRaw`
       SELECT 
         a.article_id::INT AS article_id,
@@ -297,7 +297,83 @@ router.get('/public/:slug', optionalAuth, async (req, res) => {
   }
 });
 
-// 7. TOGGLE FOLLOW/UNFOLLOW WIKI
+// 7. DELETE WIKI SPACE (Cascading cleanup - Primary Author & Global Admins only)
+router.delete('/:wikiId', authenticateToken, async (req, res) => {
+  try {
+    const wikiId = Number(req.params.wikiId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    const wikis = await prisma.$queryRaw`
+      SELECT wiki_id::INT AS wiki_id, title, creator_id::INT AS creator_id
+      FROM wiki_spaces
+      WHERE wiki_id = ${wikiId}
+      LIMIT 1;
+    `;
+
+    if (wikis.length === 0) {
+      return res.status(404).json({ success: false, message: 'Wiki space not found' });
+    }
+
+    const wiki = wikis[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships
+      WHERE wiki_id = ${wikiId} AND user_id = ${userId} AND role = 'author'::wiki_role_enum
+      LIMIT 1;
+    `;
+
+    const isPrimaryAuthor = membership.length > 0 || wiki.creator_id === userId;
+
+    if (!isGlobal && !isPrimaryAuthor) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: Only the primary author or a global administrator can delete this wiki space.'
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.$executeRaw`
+        DELETE FROM reading_list_items
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM reports
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM article_versions
+        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
+      `,
+      prisma.$executeRaw`
+        DELETE FROM articles
+        WHERE wiki_id = ${wikiId};
+      `,
+      prisma.$executeRaw`
+        DELETE FROM user_wiki_follows
+        WHERE wiki_id = ${wikiId};
+      `,
+      prisma.$executeRaw`
+        DELETE FROM wiki_memberships
+        WHERE wiki_id = ${wikiId};
+      `,
+      prisma.$executeRaw`
+        DELETE FROM wiki_spaces
+        WHERE wiki_id = ${wikiId};
+      `
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: `Wiki space "${wiki.title}" and all nested articles have been permanently deleted.`
+    });
+  } catch (error) {
+    console.error('Delete wiki error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete wiki space' });
+  }
+});
+
+// 8. TOGGLE FOLLOW/UNFOLLOW WIKI
 router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
@@ -324,7 +400,7 @@ router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
   }
 });
 
-// 8. TOGGLE FOLLOW/UNFOLLOW CATEGORY
+// 9. TOGGLE FOLLOW/UNFOLLOW CATEGORY
 router.post('/categories/:categoryId/follow', authenticateToken, async (req, res) => {
   try {
     const categoryId = Number(req.params.categoryId);

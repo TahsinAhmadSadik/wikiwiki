@@ -114,7 +114,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// FETCH FOR EDITING (MUST BE ABOVE /:wikiSlug/:articleSlug TO AVOID ROUTE SHADOWING)
+// FETCH FOR EDITING
 router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -178,7 +178,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// COMMIT NEW VERSION (POST /api/articles/:articleId/versions)
+// COMMIT NEW VERSION
 router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -255,10 +255,101 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   }
 });
 
-// GET ARTICLE BY SLUG (PUBLIC READER - MUST BE AT THE BOTTOM)
+// TOGGLE ARTICLE LOCK STATE (Authors, Co-Authors, and Global Admins)
+router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    const articles = await prisma.$queryRaw`
+      SELECT article_id::INT AS article_id, wiki_id::INT AS wiki_id, is_locked
+      FROM articles WHERE article_id = ${articleId} LIMIT 1;
+    `;
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article not found' });
+    }
+    const article = articles[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wiki authors or administrators can lock or unlock articles.'
+      });
+    }
+
+    const updated = await prisma.$queryRaw`
+      UPDATE articles
+      SET is_locked = NOT is_locked
+      WHERE article_id = ${articleId}
+      RETURNING is_locked;
+    `;
+
+    const newState = updated[0].is_locked;
+    res.status(200).json({
+      success: true,
+      is_locked: newState,
+      message: newState ? 'Article is now locked from contributor edits.' : 'Article is now unlocked.'
+    });
+  } catch (error) {
+    console.error('Toggle article lock error:', error);
+    res.status(500).json({ success: false, message: 'Failed to toggle lock status' });
+  }
+});
+
+// DELETE ARTICLE (Cascading cleanup)
+router.delete('/:articleId', authenticateToken, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    const articles = await prisma.$queryRaw`
+      SELECT article_id::INT AS article_id, wiki_id::INT AS wiki_id, title
+      FROM articles WHERE article_id = ${articleId} LIMIT 1;
+    `;
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article not found' });
+    }
+    const article = articles[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wiki authors or administrators can delete this article.'
+      });
+    }
+
+    await prisma.$transaction([
+      prisma.$executeRaw`DELETE FROM reading_list_items WHERE article_id = ${articleId};`,
+      prisma.$executeRaw`DELETE FROM reports WHERE article_id = ${articleId};`,
+      prisma.$executeRaw`DELETE FROM article_versions WHERE article_id = ${articleId};`,
+      prisma.$executeRaw`DELETE FROM articles WHERE article_id = ${articleId};`
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: `Article "${article.title}" and all associated revisions have been permanently deleted.`
+    });
+  } catch (error) {
+    console.error('Delete article error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete article' });
+  }
+});
+
+// GET ARTICLE BY SLUG (PUBLIC READER)
 router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   try {
     const { wikiSlug, articleSlug } = req.params;
+    const userId = req.user?.user_id ? Number(req.user.user_id) : null;
 
     const articles = await prisma.$queryRaw`
       SELECT 
@@ -286,6 +377,15 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
 
     const article = articles[0];
 
+    // Determine viewer authoring role for UI control buttons
+    let userRole = null;
+    if (userId) {
+      const membership = await prisma.$queryRaw`
+        SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+      `;
+      if (membership.length > 0) userRole = membership[0].role;
+    }
+
     const versions = await prisma.$queryRaw`
       SELECT 
         av.version_id::INT AS version_id,
@@ -310,7 +410,10 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
 
     res.status(200).json({
       success: true,
-      article,
+      article: {
+        ...article,
+        userRole
+      },
       latestVersion: versions[0] || null
     });
   } catch (error) {
@@ -382,7 +485,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// REVIEW VERSION: APPROVE OR REJECT REVISION
+// REVIEW VERSION
 router.post('/versions/:versionId/review', authenticateToken, async (req, res) => {
   try {
     const versionId = Number(req.params.versionId);

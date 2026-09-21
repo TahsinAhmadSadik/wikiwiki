@@ -88,9 +88,52 @@ router.get('/topic-performance', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Valid category_id is required' });
     }
 
-    const articles = await prisma.$queryRaw`
-      SELECT * FROM fn_get_top_articles_by_time_and_topic(${categoryId}, ${days}, ${limit});
-    `;
+    let articles = [];
+    try {
+      // Primary execution via UDF with explicit type casting
+      articles = await prisma.$queryRaw`
+        SELECT * FROM fn_get_top_articles_by_time_and_topic(
+          ${categoryId}::BIGINT, 
+          ${days}::BIGINT, 
+          ${limit}::BIGINT
+        );
+      `;
+    } catch (udfErr) {
+      console.warn('UDF execution failed, running inline query fallback:', udfErr.message);
+
+      // Direct fallback query in case UDF signature has not been updated in DB
+      articles = await prisma.$queryRaw`
+        WITH RECURSIVE category_tree AS (
+          SELECT category_id FROM categories WHERE category_id = ${categoryId}
+          UNION ALL
+          SELECT c.category_id 
+          FROM categories c
+          INNER JOIN category_tree ct ON COALESCE(c.parent_id, c.parent_category_id) = ct.category_id
+        )
+        SELECT 
+          a.article_id::INT AS article_id,
+          a.title,
+          a.slug,
+          w.title AS wiki_title,
+          w.slug AS wiki_slug,
+          cat.name AS category_name,
+          a.read_count::INT AS read_count,
+          (
+            SELECT COALESCE(MAX(av.version_number), 1)::INT 
+            FROM article_versions av 
+            WHERE av.article_id = a.article_id AND av.is_published = TRUE
+          ) AS published_version,
+          a.created_at
+        FROM articles a
+        INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+        INNER JOIN categories cat ON COALESCE(a.category_id, w.category_id) = cat.category_id
+        WHERE a.is_published = TRUE
+          AND COALESCE(a.category_id, w.category_id) IN (SELECT category_id FROM category_tree)
+          AND (${days}::INT <= 0 OR a.created_at >= (CURRENT_TIMESTAMP - (${days}::INT || ' days')::INTERVAL))
+        ORDER BY a.read_count DESC, a.created_at DESC
+        LIMIT ${limit};
+      `;
+    }
 
     res.status(200).json({ success: true, data: articles });
   } catch (error) {

@@ -740,3 +740,85 @@ ADD COLUMN IF NOT EXISTS cover_image_url TEXT;
 -- 2. Add thumbnail image column to articles
 ALTER TABLE articles 
 ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- Drop previous signatures to avoid overload conflicts
+DROP FUNCTION IF EXISTS fn_get_top_articles_by_time_and_topic(INT, INT, INT);
+DROP FUNCTION IF EXISTS fn_get_top_articles_by_time_and_topic(BIGINT, BIGINT, BIGINT);
+
+CREATE OR REPLACE FUNCTION fn_get_top_articles_by_time_and_topic(
+    p_category_id BIGINT,
+    p_days BIGINT,
+    p_limit BIGINT
+)
+RETURNS TABLE (
+    article_id INT,
+    title VARCHAR,
+    slug VARCHAR,
+    wiki_title VARCHAR,
+    wiki_slug VARCHAR,
+    category_name VARCHAR,
+    read_count INT,
+    published_version INT,
+    created_at TIMESTAMP WITH TIME ZONE
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH RECURSIVE category_tree AS (
+        -- 1. Root category selection
+        SELECT c.category_id
+        FROM categories c
+        WHERE c.category_id = p_category_id
+        
+        UNION ALL
+        
+        -- 2. Recursive descent matching either parent_id or parent_category_id
+        SELECT c_child.category_id
+        FROM categories c_child
+        INNER JOIN category_tree ct ON COALESCE(c_child.parent_id, c_child.parent_category_id) = ct.category_id
+    )
+    SELECT 
+        a.article_id::INT,
+        a.title,
+        a.slug,
+        w.title AS wiki_title,
+        w.slug AS wiki_slug,
+        cat.name AS category_name,
+        a.read_count::INT,
+        (
+            SELECT COALESCE(MAX(av.version_number), 1)::INT 
+            FROM article_versions av 
+            WHERE av.article_id = a.article_id AND av.is_published = TRUE
+        ) AS published_version,
+        a.created_at
+    FROM articles a
+    INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+    -- Fall back to parent wiki category if article category_id is NULL
+    INNER JOIN categories cat ON COALESCE(a.category_id, w.category_id) = cat.category_id
+    WHERE a.is_published = TRUE
+      AND COALESCE(a.category_id, w.category_id) IN (SELECT ct.category_id FROM category_tree ct)
+      AND (p_days <= 0 OR a.created_at >= (CURRENT_TIMESTAMP - (p_days || ' days')::INTERVAL))
+    ORDER BY a.read_count DESC, a.created_at DESC
+    LIMIT p_limit;
+END;
+$$ LANGUAGE plpgsql;

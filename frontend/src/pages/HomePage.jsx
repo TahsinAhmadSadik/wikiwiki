@@ -25,6 +25,7 @@ const PIE_COLORS = [
   '#ec4899',
   '#8b5cf6'
 ];
+
 export default function HomePage() {
   const { user } = useAuth();
 
@@ -49,6 +50,19 @@ export default function HomePage() {
 
   const [followedCategories, setFollowedCategories] = useState([]);
   const [followedWikis, setFollowedWikis] = useState([]);
+    const pieData =
+  topicReadDistribution.length <= 7
+    ? topicReadDistribution
+    : [
+        ...topicReadDistribution.slice(0, 7),
+        {
+          category_name: 'Others',
+          total_reads: topicReadDistribution
+            .slice(7)
+            .reduce((sum, item) => sum + Number(item.total_reads), 0)
+        }
+      ];
+
 
   useEffect(() => {
     const fetchLandingData = async () => {
@@ -496,7 +510,7 @@ export default function HomePage() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={topicReadDistribution}
+                        data={pieData}
                         dataKey="total_reads"
                         nameKey="category_name"
                         cx="50%"
@@ -706,4 +720,5 @@ export default function HomePage() {
       </main>
     </div>
   );
+
 }

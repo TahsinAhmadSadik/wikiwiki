@@ -1,20 +1,19 @@
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
-import { prisma } from '../lib/prisma.js';
+import { executeTransaction } from '../lib/db.js';
 import { supabase } from '../lib/supabase.js';
 import { optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Health check to verify route mounting in browser
 router.get('/test', (req, res) => {
   res.json({ success: true, message: 'Media route is active and responding!' });
 });
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = /jpeg|jpg|png|webp|gif|svg/;
     const extValid = allowed.test(path.extname(file.originalname).toLowerCase());
@@ -28,16 +27,21 @@ const upload = multer({
   }
 }).single('file');
 
-// POST /api/media/upload
+// POST /api/media/upload (Explicit Transaction: INSERT media + INSERT media_images)
 router.post('/upload', optionalAuth, (req, res) => {
   upload(req, res, async (err) => {
-    // ...
+    if (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file uploaded' });
+    }
+
     try {
       const userId = req.user?.user_id ? Number(req.user.user_id) : null;
       const ext = path.extname(req.file.originalname).toLowerCase();
       const uniqueFilename = `articles/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
 
-      // 1. Upload buffer directly to Supabase Storage
       const { data: storageData, error: storageError } = await supabase.storage
         .from('wiki-media')
         .upload(uniqueFilename, req.file.buffer, {
@@ -49,41 +53,28 @@ router.post('/upload', optionalAuth, (req, res) => {
         throw new Error(`Supabase Storage error: ${storageError.message}`);
       }
 
-      // 2. Get Public CDN URL
       const { data: urlData } = supabase.storage
         .from('wiki-media')
         .getPublicUrl(uniqueFilename);
 
       const publicUrl = urlData.publicUrl;
 
-      // 3. Record in PostgreSQL media & media_images tables
-      const savedMedia = await prisma.$transaction(async (tx) => {
-        const mediaRows = await tx.$queryRaw`
-          INSERT INTO media (
-            media_type,
-            file_url,
-            uploader_id
-          )
-          VALUES (
-            'image'::media_type_enum,
-            ${publicUrl},
-            ${userId}
-          )
-          RETURNING media_id::INT AS media_id, file_url;
-        `;
+      // Explicit BEGIN -> COMMIT / ROLLBACK transaction
+      const savedMedia = await executeTransaction(async (client) => {
+        const mediaRes = await client.query(
+          `INSERT INTO media (media_type, file_url, uploader_id)
+           VALUES ('image'::media_type_enum, $1, $2)
+           RETURNING media_id, file_url;`,
+          [publicUrl, userId]
+        );
 
-        const mediaItem = mediaRows[0];
+        const mediaItem = mediaRes.rows[0];
 
-        await tx.$executeRaw`
-          INSERT INTO media_images (
-            media_id,
-            alt_text
-          )
-          VALUES (
-            ${mediaItem.media_id},
-            ${req.file.originalname.slice(0, 255)}
-          );
-        `;
+        await client.query(
+          `INSERT INTO media_images (media_id, alt_text)
+           VALUES ($1, $2);`,
+          [mediaItem.media_id, req.file.originalname.slice(0, 255)]
+        );
 
         return mediaItem;
       });

@@ -10,7 +10,6 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 function parseArticleContent(text, currentWikiSlug) {
   if (!text || typeof text !== 'string') return text;
 
-  // Match both [[Wiki Link]] and [Markdown Link](url)
   const tokenRegex = /(\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))/g;
   const parts = text.split(tokenRegex);
 
@@ -63,7 +62,6 @@ function parseArticleContent(text, currentWikiSlug) {
         );
       }
 
-      // External or standard web link
       if (href.startsWith('http') || href.startsWith('//')) {
         return (
           <a
@@ -78,7 +76,6 @@ function parseArticleContent(text, currentWikiSlug) {
         );
       }
 
-      // Relative path or local slug
       const localTarget = href.replace(/^\/+/, '').split(/[?#]/)[0];
       return (
         <WikiHoverCard
@@ -102,6 +99,7 @@ export default function ArticlePage() {
   const navigate = useNavigate();
 
   const [data, setData] = useState(null);
+  const [similarArticles, setSimilarArticles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -120,9 +118,12 @@ export default function ArticlePage() {
 
   useEffect(() => {
     const fetchArticle = async () => {
+      setLoading(true);
+      setError('');
       try {
         const res = await api.get(`/articles/${wikiSlug}/${articleSlug}`);
         setData(res);
+        setSimilarArticles(res.similarArticles || []);
       } catch (err) {
         setError(err.data?.message || err.message);
       } finally {
@@ -349,6 +350,11 @@ export default function ArticlePage() {
                 <Link to={`/wiki/${article.wiki_slug || wikiSlug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
                   {article.wiki_title}
                 </Link>
+                {article.category_name && (
+                  <span style={{ marginLeft: '0.5rem', color: '#71717a' }}>
+                    • {article.category_name}
+                  </span>
+                )}
               </span>
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>
@@ -566,14 +572,13 @@ export default function ArticlePage() {
         </header>
 
         {/* CONTENT BLOCK RENDERER */}
-        <article style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', lineHeight: 1.75 }}>
+        <article style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', lineHeight: 1.75, marginBottom: '4rem' }}>
           {blocks.length === 0 ? (
             <p style={{ color: '#71717a' }}>No content available for this version.</p>
           ) : (
             blocks.map((block, i) => {
               const key = block.id || i;
 
-              // 1. Heading block
               if (block.type === 'header') {
                 return (
                   <h2 key={key} style={{ fontSize: '1.55rem', fontWeight: 600, marginTop: '1rem', color: '#fff' }}>
@@ -582,7 +587,6 @@ export default function ArticlePage() {
                 );
               }
 
-              // 2. Image block
               if (block.type === 'image') {
                 const imgUrl = block.data?.url || block.url;
                 if (!imgUrl) return null;
@@ -611,7 +615,6 @@ export default function ArticlePage() {
                 );
               }
 
-              // 3. Paragraph block with Wiki link & Hover Card resolution
               return (
                 <p key={key} style={{ fontSize: '1.05rem', color: '#d4d4d8', margin: 0 }}>
                   {parseArticleContent(block.data?.text || block.text, article.wiki_slug || wikiSlug)}
@@ -620,6 +623,107 @@ export default function ArticlePage() {
             })
           )}
         </article>
+
+        {/* SIMILAR / RELATED ARTICLES SECTION */}
+        {similarArticles.length > 0 && (
+          <section style={{ borderTop: '1px solid #1f1f23', paddingTop: '2.5rem', marginBottom: '2rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 600, margin: 0, color: '#f4f4f5' }}>
+                  Related Articles
+                </h3>
+                <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
+                  More topics from {article.category_name} and {article.wiki_title}
+                </span>
+              </div>
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+              gap: '1rem'
+            }}>
+              {similarArticles.map((rel) => (
+                <div
+                  key={rel.article_id}
+                  style={{
+                    backgroundColor: '#0d0d0f',
+                    border: '1px solid #1f1f23',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between'
+                  }}
+                >
+                  <div>
+                    {/* Thumbnail banner */}
+                    <div style={{
+                      height: 110,
+                      width: '100%',
+                      backgroundColor: '#141417',
+                      backgroundImage: rel.thumbnail_url ? `url(${rel.thumbnail_url})` : 'none',
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      borderBottom: '1px solid #1f1f23',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}>
+                      {!rel.thumbnail_url && (
+                        <span style={{ fontSize: '1.75rem', color: '#3f3f46' }}>📄</span>
+                      )}
+                    </div>
+
+                    <div style={{ padding: '0.9rem' }}>
+                      <span style={{ fontSize: '0.72rem', color: '#a855f7', fontWeight: 600, display: 'block', marginBottom: '0.25rem' }}>
+                        {rel.wiki_title}
+                      </span>
+                      <h4 style={{ margin: '0 0 0.4rem 0', fontSize: '1rem', lineHeight: 1.35 }}>
+                        <Link
+                          to={`/wiki/${rel.wiki_slug}/${rel.slug}`}
+                          style={{ color: '#fff', textDecoration: 'none' }}
+                        >
+                          {rel.title}
+                        </Link>
+                      </h4>
+                      <p style={{
+                        margin: 0,
+                        color: '#71717a',
+                        fontSize: '0.8rem',
+                        lineHeight: 1.45,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden'
+                      }}>
+                        {rel.description || 'No summary available.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.65rem 0.9rem',
+                    borderTop: '1px solid #1a1a1e',
+                    fontSize: '0.75rem',
+                    color: '#a1a1aa'
+                  }}>
+                    <span>{rel.read_count} reads</span>
+                    <Link
+                      to={`/wiki/${rel.wiki_slug}/${rel.slug}`}
+                      style={{ color: '#c084fc', textDecoration: 'none', fontWeight: 500 }}
+                    >
+                      Read →
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );

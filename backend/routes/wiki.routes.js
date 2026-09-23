@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { optionalAuth, authenticateToken } from '../middleware/auth.js';
 import { authorizeWikiAccess } from '../middleware/wikiAuth.js';
 
@@ -102,38 +103,44 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(409).json({ success: false, message: 'A wiki with this title already exists' });
     }
 
-    const newWiki = await prisma.$transaction(async (tx) => {
-      const created = await tx.$queryRaw`
-        INSERT INTO wiki_spaces (
-          title,
-          slug,
-          description,
-          creator_id,
-          category_id,
-          cover_image_url,
-          media_id
-        )
-        VALUES (
-          ${title.trim()},
-          ${slug},
-          ${description || null},
-          ${userId},
-          ${category_id ? Number(category_id) : null},
-          ${cover_image_url || null},
-          ${media_id ? Number(media_id) : null}
-        )
-        RETURNING wiki_id::INT AS wiki_id, title, slug;
-      `;
+const newWiki = await withTransaction(async (client) => {
+  const created = await client.query(
+    `
+      INSERT INTO wiki_spaces (
+        title,
+        slug,
+        description,
+        creator_id,
+        category_id,
+        cover_image_url,
+        media_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING wiki_id::INT AS wiki_id, title, slug
+    `,
+    [
+      title.trim(),
+      slug,
+      description || null,
+      userId,
+      category_id ? Number(category_id) : null,
+      cover_image_url || null,
+      media_id ? Number(media_id) : null
+    ]
+  );
 
-      const wiki = created[0];
+  const wiki = created.rows[0];
 
-      await tx.$executeRaw`
-        INSERT INTO wiki_memberships (user_id, wiki_id, role)
-        VALUES (${userId}, ${wiki.wiki_id}, 'author'::wiki_role_enum);
-      `;
+  await client.query(
+    `
+      INSERT INTO wiki_memberships (user_id, wiki_id, role)
+      VALUES ($1, $2, 'author'::wiki_role_enum)
+    `,
+    [userId, wiki.wiki_id]
+  );
 
-      return wiki;
-    });
+  return wiki;
+});
 
     res.status(201).json({
       success: true,
@@ -175,12 +182,21 @@ router.patch('/:wikiId/cover', authenticateToken, async (req, res) => {
       });
     }
 
-    await prisma.$executeRaw`
+await withTransaction(async (client) => {
+  await client.query(
+    `
       UPDATE wiki_spaces
-      SET cover_image_url = ${cover_image_url || null},
-          media_id = ${media_id ? Number(media_id) : null}
-      WHERE wiki_id = ${wikiId};
-    `;
+      SET cover_image_url = $1,
+          media_id = $2
+      WHERE wiki_id = $3
+    `,
+    [
+      cover_image_url || null,
+      media_id ? Number(media_id) : null,
+      wikiId
+    ]
+  );
+});
 
     res.status(200).json({
       success: true,
@@ -340,42 +356,87 @@ router.delete('/:wikiId', authenticateToken, async (req, res) => {
         message: 'Forbidden: Only the primary author or a global administrator can delete this wiki space.'
       });
     }
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM article_media
+      WHERE article_id IN (
+        SELECT article_id
+        FROM articles
+        WHERE wiki_id = $1
+      )
+    `,
+    [wikiId]
+  );
 
-    await prisma.$transaction([
-      prisma.$executeRaw`
-        DELETE FROM article_media
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM reading_list_items
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM reports
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM article_versions
-        WHERE article_id IN (SELECT article_id FROM articles WHERE wiki_id = ${wikiId});
-      `,
-      prisma.$executeRaw`
-        DELETE FROM articles
-        WHERE wiki_id = ${wikiId};
-      `,
-      prisma.$executeRaw`
-        DELETE FROM user_wiki_follows
-        WHERE wiki_id = ${wikiId};
-      `,
-      prisma.$executeRaw`
-        DELETE FROM wiki_memberships
-        WHERE wiki_id = ${wikiId};
-      `,
-      prisma.$executeRaw`
-        DELETE FROM wiki_spaces
-        WHERE wiki_id = ${wikiId};
-      `
-    ]);
+  await client.query(
+    `
+      DELETE FROM reading_list_items
+      WHERE article_id IN (
+        SELECT article_id
+        FROM articles
+        WHERE wiki_id = $1
+      )
+    `,
+    [wikiId]
+  );
 
+  await client.query(
+    `
+      DELETE FROM reports
+      WHERE article_id IN (
+        SELECT article_id
+        FROM articles
+        WHERE wiki_id = $1
+      )
+    `,
+    [wikiId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM article_versions
+      WHERE article_id IN (
+        SELECT article_id
+        FROM articles
+        WHERE wiki_id = $1
+      )
+    `,
+    [wikiId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM articles
+      WHERE wiki_id = $1
+    `,
+    [wikiId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM user_wiki_follows
+      WHERE wiki_id = $1
+    `,
+    [wikiId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM wiki_memberships
+      WHERE wiki_id = $1
+    `,
+    [wikiId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM wiki_spaces
+      WHERE wiki_id = $1
+    `,
+    [wikiId]
+  );
+});
     res.status(200).json({
       success: true,
       message: `Wiki space "${wiki.title}" and all nested articles have been permanently deleted.`
@@ -412,12 +473,17 @@ router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author')
       return res.status(400).json({ success: false, message: 'Cannot assign a banned user' });
     }
 
-    await prisma.$executeRaw`
+ await withTransaction(async (client) => {
+  await client.query(
+    `
       INSERT INTO wiki_memberships (user_id, wiki_id, role)
-      VALUES (${targetUser.user_id}, ${wikiId}, 'co_author'::wiki_role_enum)
+      VALUES ($1, $2, 'co_author'::wiki_role_enum)
       ON CONFLICT (user_id, wiki_id)
-      DO UPDATE SET role = 'co_author'::wiki_role_enum;
-    `;
+      DO UPDATE SET role = 'co_author'::wiki_role_enum
+    `,
+    [targetUser.user_id, wikiId]
+  );
+});
 
     res.status(200).json({
       success: true,
@@ -463,17 +529,40 @@ router.post('/:wikiId/follow', authenticateToken, async (req, res) => {
       SELECT user_id FROM user_wiki_follows WHERE wiki_id = ${wikiId} AND user_id = ${userId} LIMIT 1;
     `;
 
-    if (existing.length > 0) {
-      await prisma.$executeRaw`
-        DELETE FROM user_wiki_follows WHERE wiki_id = ${wikiId} AND user_id = ${userId};
-      `;
-      return res.status(200).json({ success: true, following: false, message: 'Unfollowed wiki' });
-    } else {
-      await prisma.$executeRaw`
-        INSERT INTO user_wiki_follows (user_id, wiki_id) VALUES (${userId}, ${wikiId});
-      `;
-      return res.status(200).json({ success: true, following: true, message: 'Following wiki' });
-    }
+if (existing.length > 0) {
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        DELETE FROM user_wiki_follows
+        WHERE wiki_id = $1
+          AND user_id = $2
+      `,
+      [wikiId, userId]
+    );
+  });
+
+  return res.status(200).json({
+    success: true,
+    following: false,
+    message: 'Unfollowed wiki'
+  });
+} else {
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        INSERT INTO user_wiki_follows (user_id, wiki_id)
+        VALUES ($1, $2)
+      `,
+      [userId, wikiId]
+    );
+  });
+
+  return res.status(200).json({
+    success: true,
+    following: true,
+    message: 'Following wiki'
+  });
+}
   } catch (error) {
     console.error('Toggle wiki follow error:', error);
     res.status(500).json({ success: false, message: 'Failed to update follow state' });
@@ -490,17 +579,40 @@ router.post('/categories/:categoryId/follow', authenticateToken, async (req, res
       SELECT user_id FROM user_category_follows WHERE category_id = ${categoryId} AND user_id = ${userId} LIMIT 1;
     `;
 
-    if (existing.length > 0) {
-      await prisma.$executeRaw`
-        DELETE FROM user_category_follows WHERE category_id = ${categoryId} AND user_id = ${userId};
-      `;
-      return res.status(200).json({ success: true, following: false, message: 'Unfollowed category' });
-    } else {
-      await prisma.$executeRaw`
-        INSERT INTO user_category_follows (user_id, category_id) VALUES (${userId}, ${categoryId});
-      `;
-      return res.status(200).json({ success: true, following: true, message: 'Following category' });
-    }
+if (existing.length > 0) {
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        DELETE FROM user_category_follows
+        WHERE category_id = $1
+          AND user_id = $2
+      `,
+      [categoryId, userId]
+    );
+  });
+
+  return res.status(200).json({
+    success: true,
+    following: false,
+    message: 'Unfollowed category'
+  });
+} else {
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        INSERT INTO user_category_follows (user_id, category_id)
+        VALUES ($1, $2)
+      `,
+      [userId, categoryId]
+    );
+  });
+
+  return res.status(200).json({
+    success: true,
+    following: true,
+    message: 'Following category'
+  });
+}
   } catch (error) {
     console.error('Toggle category follow error:', error);
     res.status(500).json({ success: false, message: 'Failed to update category follow' });

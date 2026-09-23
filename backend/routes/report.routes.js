@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -31,16 +32,26 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    await prisma.$executeRaw`
-      INSERT INTO reports (article_id, version_id, reporter_id, reason, status)
-      VALUES (
-        ${Number(article_id)},
-        ${version_id ? Number(version_id) : null},
-        ${reporterId},
-        ${reason.trim()},
-        'pending'
-      );
-    `;
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      INSERT INTO reports (
+        article_id,
+        version_id,
+        reporter_id,
+        reason,
+        status
+      )
+      VALUES ($1, $2, $3, $4, 'pending')
+    `,
+    [
+      Number(article_id),
+      version_id ? Number(version_id) : null,
+      reporterId,
+      reason.trim()
+    ]
+  );
+});
 
     res.status(201).json({
       success: true,
@@ -159,15 +170,24 @@ router.post('/:reportId/resolve', authenticateToken, async (req, res) => {
     }
 
     const demerits = action === 'resolved' ? Number(demerit_points) : 0;
-
-    await prisma.$executeRaw`
-    CALL sp_resolve_report_and_penalize(
-        ${reportId},
-        ${resolverId},
-        ${action},
-        ${demerits}
-    );
-    `;
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      CALL sp_resolve_report_and_penalize(
+        $1,
+        $2,
+        $3,
+        $4
+      )
+    `,
+    [
+      reportId,
+      resolverId,
+      action,
+      demerits
+    ]
+  );
+});
 
     res.status(200).json({
       success: true,

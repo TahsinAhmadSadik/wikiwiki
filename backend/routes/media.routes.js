@@ -2,6 +2,7 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { supabase } from '../lib/supabase.js';
 import { optionalAuth } from '../middleware/auth.js';
 
@@ -57,37 +58,44 @@ router.post('/upload', optionalAuth, (req, res) => {
       const publicUrl = urlData.publicUrl;
 
       // 3. Record in PostgreSQL media & media_images tables
-      const savedMedia = await prisma.$transaction(async (tx) => {
-        const mediaRows = await tx.$queryRaw`
-          INSERT INTO media (
-            media_type,
-            file_url,
-            uploader_id
-          )
-          VALUES (
-            'image'::media_type_enum,
-            ${publicUrl},
-            ${userId}
-          )
-          RETURNING media_id::INT AS media_id, file_url;
-        `;
+     const savedMedia = await withTransaction(async (client) => {
+  const mediaResult = await client.query(
+    `
+      INSERT INTO media (
+        media_type,
+        file_url,
+        uploader_id
+      )
+      VALUES (
+        'image'::media_type_enum,
+        $1,
+        $2
+      )
+      RETURNING
+        media_id::INT AS media_id,
+        file_url
+    `,
+    [publicUrl, userId]
+  );
 
-        const mediaItem = mediaRows[0];
+  const mediaItem = mediaResult.rows[0];
 
-        await tx.$executeRaw`
-          INSERT INTO media_images (
-            media_id,
-            alt_text
-          )
-          VALUES (
-            ${mediaItem.media_id},
-            ${req.file.originalname.slice(0, 255)}
-          );
-        `;
+  await client.query(
+    `
+      INSERT INTO media_images (
+        media_id,
+        alt_text
+      )
+      VALUES ($1, $2)
+    `,
+    [
+      mediaItem.media_id,
+      req.file.originalname.slice(0, 255)
+    ]
+  );
 
-        return mediaItem;
-      });
-
+  return mediaItem;
+});
       return res.status(201).json({
         success: true,
         media_id: savedMedia.media_id,

@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -65,11 +66,33 @@ router.post('/', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'List title is required' });
     }
 
-    const created = await prisma.$queryRaw`
-      INSERT INTO reading_lists (user_id, title, description, is_private)
-      VALUES (${userId}, ${title.trim()}, ${description.trim()}, ${Boolean(is_private)})
-      RETURNING list_id::INT AS list_id, title, description, is_private, created_at;
-    `;
+const created = await withTransaction(async (client) => {
+  const result = await client.query(
+    `
+      INSERT INTO reading_lists (
+        user_id,
+        title,
+        description,
+        is_private
+      )
+      VALUES ($1, $2, $3, $4)
+      RETURNING
+        list_id::INT AS list_id,
+        title,
+        description,
+        is_private,
+        created_at
+    `,
+    [
+      userId,
+      title.trim(),
+      description.trim(),
+      Boolean(is_private)
+    ]
+  );
+
+  return result.rows;
+});
 
     res.status(201).json({ success: true, list: created[0] });
   } catch (error) {
@@ -102,14 +125,30 @@ router.post('/:listId/toggle-article', authenticateToken, async (req, res) => {
     `;
 
     if (existing.length > 0) {
-      await prisma.$executeRaw`
-        DELETE FROM reading_list_items WHERE list_id = ${listId} AND article_id = ${articleId};
-      `;
+     await withTransaction(async (client) => {
+    await client.query(
+      `
+        DELETE FROM reading_list_items
+        WHERE list_id = $1
+          AND article_id = $2
+      `,
+      [listId, articleId]
+    );
+  });
       return res.status(200).json({ success: true, saved: false, message: 'Removed from reading list' });
     } else {
-      await prisma.$executeRaw`
-        INSERT INTO reading_list_items (list_id, article_id) VALUES (${listId}, ${articleId});
-      `;
+      await withTransaction(async (client) => {
+    await client.query(
+      `
+        INSERT INTO reading_list_items (
+          list_id,
+          article_id
+        )
+        VALUES ($1, $2)
+      `,
+      [listId, articleId]
+    );
+  });
       return res.status(200).json({ success: true, saved: true, message: 'Saved to reading list' });
     }
   } catch (error) {
@@ -163,14 +202,26 @@ router.delete('/:listId', authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.user_id);
     const listId = Number(req.params.listId);
+const result = await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM reading_list_items
+      WHERE list_id = $1
+    `,
+    [listId]
+  );
 
-    await prisma.$executeRaw`
-      DELETE FROM reading_list_items WHERE list_id = ${listId};
-    `;
+  const deleteResult = await client.query(
+    `
+      DELETE FROM reading_lists
+      WHERE list_id = $1
+        AND user_id = $2
+    `,
+    [listId, userId]
+  );
 
-    const result = await prisma.$executeRaw`
-      DELETE FROM reading_lists WHERE list_id = ${listId} AND user_id = ${userId};
-    `;
+  return deleteResult.rowCount;
+});
 
     if (result === 0) {
       return res.status(404).json({ success: false, message: 'List not found or unauthorized' });

@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { Resend } from 'resend';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -59,13 +60,17 @@ router.post('/register', authLimiter, async (req, res) => {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
     // Clean up any previous unverified registration attempts for this email or username
-    await prisma.$executeRaw`
+  await withTransaction(async (client) => {
+  await client.query(
+    `
       DELETE FROM pending_registrations
-      WHERE email = ${email} OR username = ${username};
-    `;
+      WHERE email = $1 OR username = $2
+    `,
+    [email, username]
+  );
 
-    // Stage pending registration
-    await prisma.$executeRaw`
+  await client.query(
+    `
       INSERT INTO pending_registrations (
         username,
         email,
@@ -73,15 +78,17 @@ router.post('/register', authLimiter, async (req, res) => {
         token_hash,
         expires_at
       )
-      VALUES (
-        ${username},
-        ${email},
-        ${passwordHash},
-        ${tokenHash},
-        ${expiresAt}
-      );
-    `;
-
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [
+      username,
+      email,
+      passwordHash,
+      tokenHash,
+      expiresAt
+    ]
+  );
+});
     const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${rawToken}`;
 
     // Always log to terminal for local dev and teammate testing
@@ -143,9 +150,15 @@ router.post('/verify-email', authLimiter, async (req, res) => {
     const pending = records[0];
 
     if (new Date(pending.expires_at) < new Date()) {
-      await prisma.$executeRaw`
-        DELETE FROM pending_registrations WHERE pending_id = ${pending.pending_id};
-      `;
+    await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM pending_registrations
+      WHERE pending_id = $1
+    `,
+    [pending.pending_id]
+  );
+});
       return res.status(400).json({ success: false, message: 'Verification link has expired. Please sign up again.' });
     }
 
@@ -157,32 +170,45 @@ router.post('/verify-email', authLimiter, async (req, res) => {
     `;
 
     if (conflict.length > 0) {
-      await prisma.$executeRaw`
-        DELETE FROM pending_registrations WHERE pending_id = ${pending.pending_id};
-      `;
+   await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM pending_registrations
+      WHERE pending_id = $1
+    `,
+    [pending.pending_id]
+  );
+});
       return res.status(409).json({ success: false, message: 'Username or email is already registered.' });
     }
 
     // Insert user into real `users` table and delete from `pending_registrations`
-    await prisma.$transaction([
-      prisma.$executeRaw`
-        INSERT INTO users (
-          username,
-          email,
-          password_hash,
-          global_role
-        )
-        VALUES (
-          ${pending.username},
-          ${pending.email},
-          ${pending.password_hash},
-          'contributor'
-        );
-      `,
-      prisma.$executeRaw`
-        DELETE FROM pending_registrations WHERE pending_id = ${pending.pending_id};
-      `
-    ]);
+ await withTransaction(async (client) => {
+  await client.query(
+    `
+      INSERT INTO users (
+        username,
+        email,
+        password_hash,
+        global_role
+      )
+      VALUES ($1, $2, $3, 'contributor')
+    `,
+    [
+      pending.username,
+      pending.email,
+      pending.password_hash
+    ]
+  );
+
+  await client.query(
+    `
+      DELETE FROM pending_registrations
+      WHERE pending_id = $1
+    `,
+    [pending.pending_id]
+  );
+});
 
     res.status(201).json({
       success: true,
@@ -296,11 +322,19 @@ router.post('/login', authLimiter, async (req, res) => {
 
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
-    await prisma.$executeRaw`
+await withTransaction(async (client) => {
+  await client.query(
+    `
       UPDATE users
-      SET token_version = token_version + ${process.env.TOKEN_UPDATE_KEY}::INT
-      WHERE user_id = ${req.user.user_id};
-    `;
+      SET token_version = token_version + $1::INT
+      WHERE user_id = $2
+    `,
+    [
+      process.env.TOKEN_UPDATE_KEY,
+      req.user.user_id
+    ]
+  );
+});
 
     res.status(200).json({
       success: true,
@@ -348,18 +382,33 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes validity
 
     // Invalidate any existing unused reset tokens for this user
-    await prisma.$executeRaw`
+ await withTransaction(async (client) => {
+  await client.query(
+    `
       UPDATE password_resets
       SET used_at = CURRENT_TIMESTAMP
-      WHERE user_id = ${user.user_id} AND used_at IS NULL;
-    `;
+      WHERE user_id = $1
+        AND used_at IS NULL
+    `,
+    [user.user_id]
+  );
 
-    // Insert new reset token
-    await prisma.$executeRaw`
-      INSERT INTO password_resets (user_id, token_hash, expires_at)
-      VALUES (${user.user_id}, ${tokenHash}, ${expiresAt});
-    `;
-
+  await client.query(
+    `
+      INSERT INTO password_resets (
+        user_id,
+        token_hash,
+        expires_at
+      )
+      VALUES ($1, $2, $3)
+    `,
+    [
+      user.user_id,
+      tokenHash,
+      expiresAt
+    ]
+  );
+});
     // Generate reset URL (Front-end URL)
     const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${rawToken}`;
 
@@ -434,20 +483,29 @@ router.post('/reset-password', authLimiter, async (req, res) => {
     const newPasswordHash = await bcrypt.hash(password, 12);
 
     // Update password, increment token_version (invalidating active sessions), and mark token used
-    await prisma.$transaction([
-      prisma.$executeRaw`
-        UPDATE users
-        SET password_hash = ${newPasswordHash},
-            token_version = token_version + 1
-        WHERE user_id = ${resetRecord.user_id};
-      `,
-      prisma.$executeRaw`
-        UPDATE password_resets
-        SET used_at = CURRENT_TIMESTAMP
-        WHERE reset_id = ${resetRecord.reset_id};
-      `
-    ]);
+ await withTransaction(async (client) => {
+  await client.query(
+    `
+      UPDATE users
+      SET password_hash = $1,
+          token_version = token_version + 1
+      WHERE user_id = $2
+    `,
+    [
+      newPasswordHash,
+      resetRecord.user_id
+    ]
+  );
 
+  await client.query(
+    `
+      UPDATE password_resets
+      SET used_at = CURRENT_TIMESTAMP
+      WHERE reset_id = $1
+    `,
+    [resetRecord.reset_id]
+  );
+});
     res.status(200).json({
       success: true,
       message: 'Password updated successfully. You can now log in with your new credentials.'
@@ -498,34 +556,58 @@ router.post('/onboarding', authenticateToken, async (req, res) => {
     const { category_ids = [], wiki_ids = [] } = req.body;
     const userId = req.user.user_id;
 
-    const queries = [];
+    // const queries = [];
 
     // Batch insert category follows
-    for (const catId of category_ids) {
-      queries.push(prisma.$executeRaw`
-        INSERT INTO user_category_follows (user_id, category_id)
-        VALUES (${userId}, ${Number(catId)})
-        ON CONFLICT (user_id, category_id) DO NOTHING;
-      `);
-    }
+await withTransaction(async (client) => {
+  // Insert category follows
+  for (const catId of category_ids) {
+    await client.query(
+      `
+        INSERT INTO user_category_follows (
+          user_id,
+          category_id
+        )
+        VALUES ($1, $2)
+        ON CONFLICT (user_id, category_id) DO NOTHING
+      `,
+      [
+        userId,
+        Number(catId)
+      ]
+    );
+  }
 
-    // Batch insert wiki follows
-    for (const wId of wiki_ids) {
-      queries.push(prisma.$executeRaw`
-        INSERT INTO user_wiki_follows (user_id, wiki_id)
-        VALUES (${userId}, ${Number(wId)})
-        ON CONFLICT (user_id, wiki_id) DO NOTHING;
-      `);
-    }
+  // Insert wiki follows
+  for (const wId of wiki_ids) {
+    await client.query(
+      `
+        INSERT INTO user_wiki_follows (
+          user_id,
+          wiki_id
+        )
+        VALUES ($1, $2)
+        ON CONFLICT (user_id, wiki_id) DO NOTHING
+      `,
+      [
+        userId,
+        Number(wId)
+      ]
+    );
+  }
 
-    // Mark user onboarding as complete
-    queries.push(prisma.$executeRaw`
+  // Mark onboarding as complete
+  await client.query(
+    `
       UPDATE users
       SET has_onboarded = TRUE
-      WHERE user_id = ${userId};
-    `);
+      WHERE user_id = $1
+    `,
+    [userId]
+  );
+});
 
-    await prisma.$transaction(queries);
+    // await prisma.$transaction(queries);
 
     res.status(200).json({
       success: true,

@@ -20,7 +20,10 @@ export default function AdminPanelPage() {
 
   const [inspectingVersion, setInspectingVersion] = useState(null);
   const [approvalFeedback, setApprovalFeedback] = useState('');
+  
+  // Demerit & Rollback selections per report
   const [demeritSelections, setDemeritSelections] = useState({});
+  const [rollbackSelections, setRollbackSelections] = useState({});
 
   const [newCatName, setNewCatName] = useState('');
   const [parentCatId, setParentCatId] = useState('');
@@ -38,22 +41,46 @@ export default function AdminPanelPage() {
   const isGlobalAdmin = ['owner', 'admin'].includes(user?.global_role);
 
   const fetchAdminData = async () => {
+    setLoading(true);
     try {
-      const [wikisRes, pendingRes, reportRes, catRes] = await Promise.all([
+      const [wikisRes, pendingRes, reportRes, catRes] = await Promise.allSettled([
         api.get('/wikis/managed'),
         api.get('/articles/pending-reviews'),
         api.get('/reports/pending'),
         api.get('/categories')
       ]);
 
-      setWikis(wikisRes.wikis || []);
-      setPendingReviews(pendingRes.pending || []);
-      setReports(reportRes.reports || []);
-      setCategories(catRes.categories || []);
+      if (wikisRes.status === 'fulfilled') {
+        setWikis(wikisRes.value?.wikis || []);
+      } else {
+        console.error('Managed wikis fetch failed:', wikisRes.reason);
+      }
+
+      if (pendingRes.status === 'fulfilled') {
+        setPendingReviews(pendingRes.value?.pending || []);
+      } else {
+        console.error('Pending reviews fetch failed:', pendingRes.reason);
+      }
+
+      if (reportRes.status === 'fulfilled') {
+        setReports(reportRes.value?.reports || []);
+      } else {
+        console.error('Reports fetch failed:', reportRes.reason);
+      }
+
+      if (catRes.status === 'fulfilled') {
+        setCategories(catRes.value?.categories || []);
+      } else {
+        console.error('Categories fetch failed:', catRes.reason);
+      }
 
       if (isGlobalAdmin) {
-        const statsRes = await api.get('/admin/stats');
-        setGlobalStats(statsRes.stats);
+        try {
+          const statsRes = await api.get('/admin/stats');
+          setGlobalStats(statsRes.stats);
+        } catch (statsErr) {
+          console.error('Admin stats fetch failed:', statsErr);
+        }
       }
     } catch (err) {
       console.error('Failed to load admin data:', err);
@@ -85,11 +112,13 @@ export default function AdminPanelPage() {
   const handleResolveReport = async (reportId, action) => {
     setReviewActionMsg({ text: '', type: '' });
     const demerits = Number(demeritSelections[reportId] || 0);
+    const rollbackVerId = rollbackSelections[reportId] ? Number(rollbackSelections[reportId]) : null;
 
     try {
       const res = await api.post(`/reports/${reportId}/resolve`, {
         action,
-        demerit_points: action === 'resolved' ? demerits : 0
+        demerit_points: action === 'resolved' ? demerits : 0,
+        rollback_version_id: action === 'resolved' ? rollbackVerId : null
       });
       setReviewActionMsg({ text: res.message, type: 'success' });
       setReports((prev) => prev.filter((r) => r.report_id !== reportId));
@@ -345,7 +374,7 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* 2. MODERATION REPORTS QUEUE */}
+        {/* 2. MODERATION REPORTS QUEUE (WITH VERSION ROLLBACK OPTION) */}
         <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #ef444430', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
@@ -368,7 +397,7 @@ export default function AdminPanelPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {reports.map((rep) => (
                 <div key={rep.report_id} style={{ backgroundColor: '#141417', border: '1px solid #27272a', borderRadius: 6, padding: '1.25rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
                     <div>
                       <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
                         Wiki:{' '}
@@ -386,7 +415,9 @@ export default function AdminPanelPage() {
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {/* MODERATION ACTION SUITE */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {/* Demerit Point Selection */}
                       <select
                         value={demeritSelections[rep.report_id] || '0'}
                         onChange={(e) => setDemeritSelections({ ...demeritSelections, [rep.report_id]: e.target.value })}
@@ -398,6 +429,23 @@ export default function AdminPanelPage() {
                         <option value="2">2 Demerits</option>
                         <option value="5">5 Demerits (Instant Ban)</option>
                       </select>
+
+                      {/* Version Rollback Dropdown */}
+                      {rep.available_versions?.length > 1 && (
+                        <select
+                          value={rollbackSelections[rep.report_id] || ''}
+                          onChange={(e) => setRollbackSelections({ ...rollbackSelections, [rep.report_id]: e.target.value })}
+                          className="auth-input"
+                          style={{ width: 'auto', padding: '0.35rem 0.5rem', fontSize: '0.75rem', backgroundColor: '#09090b', color: '#eab308' }}
+                        >
+                          <option value="">Keep Current Version</option>
+                          {rep.available_versions.map((v) => (
+                            <option key={v.version_id} value={v.version_id}>
+                              ↺ Revert to v{v.version_number} ({v.edit_summary ? v.edit_summary.slice(0, 20) : 'Snapshot'})
+                            </option>
+                          ))}
+                        </select>
+                      )}
 
                       <button
                         onClick={() => handleResolveReport(rep.report_id, 'dismissed')}
@@ -579,7 +627,7 @@ export default function AdminPanelPage() {
           </section>
         )}
 
-        {/* 6. YOUR MANAGED WIKIS (WITH COVERS) */}
+        {/* 6. YOUR MANAGED WIKIS */}
         <section style={{ marginBottom: '2.5rem' }}>
           <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Your Managed Wikis</h2>
           {wikis.length === 0 ? (
@@ -599,7 +647,6 @@ export default function AdminPanelPage() {
                     justifyContent: 'space-between'
                   }}>
                     <div>
-                      {/* Wiki Cover Banner */}
                       <div style={{
                         height: 95,
                         width: '100%',

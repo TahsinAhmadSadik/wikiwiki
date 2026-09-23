@@ -34,7 +34,329 @@ function extractMediaIds(content) {
     .filter((id) => !isNaN(id) && id > 0);
 }
 
-// CREATE ARTICLE (POST /api/articles)
+function extractLinkCandidates(content) {
+  if (!content) return [];
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return [];
+
+  const candidates = new Set();
+
+  for (const block of blocks) {
+    const text = block.data?.text || block.text || '';
+    if (typeof text !== 'string') continue;
+
+    const wikiLinkRegex = /\[\[([^\]\vert{}]+)(?:\Vert{}[^\]]+)?\]\]/g;
+    let match;
+    while ((match = wikiLinkRegex.exec(text)) !== null) {
+      const raw = match[1].trim();
+      if (raw) candidates.add(raw);
+    }
+
+    const mdLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    while ((match = mdLinkRegex.exec(text)) !== null) {
+      const href = match[2].trim();
+      const wikiPathMatch = href.match(/\/wiki\/([^\/\s#?]+)\/([^\/\s#?]+)/);
+      if (wikiPathMatch) {
+        candidates.add(wikiPathMatch[2]);
+      } else {
+        const simpleSlug = href.replace(/^\/+/, '').split(/[?#]/)[0];
+        if (simpleSlug && !simpleSlug.startsWith('http') && !simpleSlug.startsWith('#')) {
+          candidates.add(simpleSlug);
+        }
+      }
+    }
+  }
+
+  return Array.from(candidates);
+}
+
+async function syncArticleLinks(tx, sourceArticleId, wikiId, content) {
+  const candidates = extractLinkCandidates(content);
+
+  await tx.$executeRaw`
+    DELETE FROM article_links WHERE source_article_id = ${sourceArticleId};
+  `;
+
+  if (candidates.length === 0) return;
+
+  const targetIds = new Set();
+
+  for (const candidate of candidates) {
+    let cleanCandidate = candidate.trim();
+    if (cleanCandidate.includes('/')) {
+      const parts = cleanCandidate.replace(/^\/+|\/+$/g, '').split('/');
+      if (parts.length >= 2) cleanCandidate = parts[1];
+    }
+
+    const slugified = cleanCandidate.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+    const lowerCandidate = cleanCandidate.toLowerCase();
+
+    const matches = await tx.$queryRaw`
+      SELECT article_id::INT AS article_id
+      FROM articles
+      WHERE article_id <> ${sourceArticleId}
+        AND is_published = TRUE
+        AND (
+          slug = ${cleanCandidate}
+          OR slug = ${slugified}
+          OR LOWER(title) = ${lowerCandidate}
+        )
+      ORDER BY CASE WHEN wiki_id = ${wikiId} THEN 0 ELSE 1 END
+      LIMIT 1;
+    `;
+
+    if (matches.length > 0) {
+      targetIds.add(matches[0].article_id);
+    }
+  }
+
+  for (const targetId of targetIds) {
+    await tx.$executeRaw`
+      INSERT INTO article_links (source_article_id, target_article_id)
+      VALUES (${sourceArticleId}, ${targetId})
+      ON CONFLICT DO NOTHING;
+    `;
+  }
+}
+
+// 1. GET ARTICLE PREVIEW CARD DATA
+router.get('/preview/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
+  try {
+    const { wikiSlug, articleSlug } = req.params;
+
+    const articles = await prisma.$queryRaw`
+      SELECT 
+        a.article_id::INT AS article_id,
+        a.title,
+        a.slug,
+        COALESCE(a.description, '') AS description,
+        a.thumbnail_url,
+        a.read_count::INT AS read_count,
+        a.created_at,
+        w.title AS wiki_title,
+        w.slug AS wiki_slug,
+        c.name AS category_name
+      FROM articles a
+      INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+      LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
+      WHERE w.slug = ${wikiSlug} AND a.slug = ${articleSlug} AND a.is_published = TRUE
+      LIMIT 1;
+    `;
+
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article preview not found' });
+    }
+
+    res.status(200).json({ success: true, article: articles[0] });
+  } catch (error) {
+    console.error('Fetch article preview error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch article preview' });
+  }
+});
+
+// 2. DYNAMICALLY RESOLVE ARBITRARY LINK
+router.get('/resolve-link', optionalAuth, async (req, res) => {
+  try {
+    const { target = '', currentWiki = '' } = req.query;
+    const cleanTarget = target.trim();
+
+    if (!cleanTarget) {
+      return res.status(400).json({ success: false, message: 'Target identifier is required' });
+    }
+
+    let wikiSlugPart = null;
+    let articleSlugPart = cleanTarget;
+    if (cleanTarget.includes('/')) {
+      const parts = cleanTarget.replace(/^\/+|\/+$/g, '').split('/');
+      if (parts.length >= 2) {
+        wikiSlugPart = parts[0];
+        articleSlugPart = parts[1];
+      }
+    }
+
+    const slugified = articleSlugPart.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+    const lowerTarget = articleSlugPart.toLowerCase();
+
+    let articles;
+    if (wikiSlugPart) {
+      articles = await prisma.$queryRaw`
+        SELECT 
+          a.article_id::INT AS article_id,
+          a.title,
+          a.slug,
+          COALESCE(a.description, '') AS description,
+          a.thumbnail_url,
+          a.read_count::INT AS read_count,
+          w.title AS wiki_title,
+          w.slug AS wiki_slug,
+          c.name AS category_name
+        FROM articles a
+        INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+        LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
+        WHERE w.slug = ${wikiSlugPart}
+          AND a.is_published = TRUE
+          AND (a.slug = ${articleSlugPart} OR a.slug = ${slugified} OR LOWER(a.title) = ${lowerTarget})
+        LIMIT 1;
+      `;
+    } else {
+      articles = await prisma.$queryRaw`
+        SELECT 
+          a.article_id::INT AS article_id,
+          a.title,
+          a.slug,
+          COALESCE(a.description, '') AS description,
+          a.thumbnail_url,
+          a.read_count::INT AS read_count,
+          w.title AS wiki_title,
+          w.slug AS wiki_slug,
+          c.name AS category_name
+        FROM articles a
+        INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+        LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
+        WHERE a.is_published = TRUE
+          AND (a.slug = ${articleSlugPart} OR a.slug = ${slugified} OR LOWER(a.title) = ${lowerTarget})
+        ORDER BY CASE WHEN w.slug = ${currentWiki} THEN 0 ELSE 1 END, a.read_count DESC
+        LIMIT 1;
+      `;
+    }
+
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Referenced article not found' });
+    }
+
+    res.status(200).json({ success: true, article: articles[0] });
+  } catch (error) {
+    console.error('Resolve link error:', error);
+    res.status(500).json({ success: false, message: 'Failed to resolve link' });
+  }
+});
+
+// 3. GET ALL VERSIONS FOR AN ARTICLE
+router.get('/:articleId/versions', optionalAuth, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+
+    const versions = await prisma.$queryRaw`
+      SELECT 
+        av.version_id::INT AS version_id,
+        av.version_number::INT AS version_number,
+        av.edit_summary,
+        av.is_published,
+        av.review_status,
+        av.created_at,
+        u.user_id::INT AS editor_id,
+        u.username AS editor_name
+      FROM article_versions av
+      LEFT JOIN users u ON av.editor_id = u.user_id
+      WHERE av.article_id = ${articleId}
+      ORDER BY av.version_number DESC;
+    `;
+
+    res.status(200).json({ success: true, versions });
+  } catch (error) {
+    console.error('Fetch versions error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load article versions' });
+  }
+});
+
+// 4. ROLLBACK ARTICLE TO A DESIGNATED VERSION (Direct Rollback)
+router.post('/:articleId/rollback', authenticateToken, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const { version_id } = req.body;
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    if (!version_id) {
+      return res.status(400).json({ success: false, message: 'Target version_id is required' });
+    }
+
+    const articles = await prisma.$queryRaw`
+      SELECT article_id::INT AS article_id, wiki_id::INT AS wiki_id, title, slug
+      FROM articles WHERE article_id = ${articleId} LIMIT 1;
+    `;
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article not found' });
+    }
+    const article = articles[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: Only wiki authors or administrators can roll back versions.'
+      });
+    }
+
+    const versionRows = await prisma.$queryRaw`
+      SELECT version_id::INT AS version_id, version_number::INT AS version_number, content
+      FROM article_versions
+      WHERE version_id = ${Number(version_id)} AND article_id = ${articleId}
+      LIMIT 1;
+    `;
+
+    if (versionRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Target revision version not found' });
+    }
+
+    const targetVersion = versionRows[0];
+    const excerpt = extractFirstParagraph(targetVersion.content);
+    const thumbnail = extractFirstImage(targetVersion.content);
+    const mediaIds = extractMediaIds(targetVersion.content);
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Deactivate current active versions without touching review_status
+      await tx.$executeRaw`
+        UPDATE article_versions
+        SET is_published = FALSE
+        WHERE article_id = ${articleId};
+      `;
+
+      // 2. Publish target version and mark it approved
+      await tx.$executeRaw`
+        UPDATE article_versions
+        SET is_published = TRUE,
+            review_status = 'approved'
+        WHERE version_id = ${targetVersion.version_id};
+      `;
+
+      // 3. Update main article metadata
+      await tx.$executeRaw`
+        UPDATE articles
+        SET description = ${excerpt},
+            thumbnail_url = ${thumbnail},
+            is_published = TRUE
+        WHERE article_id = ${articleId};
+      `;
+
+      // 4. Refresh article media
+      await tx.$executeRaw`DELETE FROM article_media WHERE article_id = ${articleId};`;
+      for (const mId of mediaIds) {
+        await tx.$executeRaw`
+          INSERT INTO article_media (article_id, media_id)
+          VALUES (${articleId}, ${mId})
+          ON CONFLICT DO NOTHING;
+        `;
+      }
+
+      await syncArticleLinks(tx, articleId, article.wiki_id, targetVersion.content);
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully restored and published Version ${targetVersion.version_number}.`,
+      version_number: targetVersion.version_number
+    });
+  } catch (error) {
+    console.error('Direct rollback error:', error);
+    res.status(500).json({ success: false, message: 'Failed to execute version rollback' });
+  }
+});
+
+// 5. CREATE ARTICLE (POST /api/articles)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { wiki_id, category_id, title, template_type = 'standard', content, edit_summary } = req.body;
@@ -69,6 +391,7 @@ router.post('/', authenticateToken, async (req, res) => {
       SELECT role FROM wiki_memberships WHERE wiki_id = ${Number(wiki_id)} AND user_id = ${userId} LIMIT 1;
     `;
     const canPublishDirectly = isGlobal || membership.length > 0;
+    const initialReviewStatus = canPublishDirectly ? 'approved' : 'pending';
     const excerpt = extractFirstParagraph(content);
     const thumbnail = extractFirstImage(content);
     const mediaIds = extractMediaIds(content);
@@ -107,6 +430,7 @@ router.post('/', authenticateToken, async (req, res) => {
           content,
           edit_summary,
           is_published,
+          review_status,
           approver_id
         )
         VALUES (
@@ -116,6 +440,7 @@ router.post('/', authenticateToken, async (req, res) => {
           ${JSON.stringify(content)}::jsonb,
           ${edit_summary || 'Initial creation'},
           ${canPublishDirectly},
+          ${initialReviewStatus},
           ${canPublishDirectly ? userId : null}
         );
       `;
@@ -126,6 +451,10 @@ router.post('/', authenticateToken, async (req, res) => {
           VALUES (${article.article_id}, ${mId})
           ON CONFLICT DO NOTHING;
         `;
+      }
+
+      if (canPublishDirectly) {
+        await syncArticleLinks(tx, article.article_id, Number(wiki_id), content);
       }
 
       return article;
@@ -148,14 +477,10 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// FETCH FOR EDITING
+// 6. FETCH FOR EDITING
 router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
-
-    if (!articleId || isNaN(articleId)) {
-      return res.status(400).json({ success: false, message: 'Valid article ID is required' });
-    }
 
     const articles = await prisma.$queryRaw`
       SELECT 
@@ -213,7 +538,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// COMMIT NEW VERSION
+// 7. COMMIT NEW VERSION
 router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -250,6 +575,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
       SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
     `;
     const canPublishDirectly = isGlobal || membership.length > 0;
+    const reviewStatus = canPublishDirectly ? 'approved' : 'pending';
 
     const maxVer = await prisma.$queryRaw`
       SELECT COALESCE(MAX(version_number), 0)::INT AS next_num
@@ -259,6 +585,12 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
     const nextVersion = maxVer[0].next_num + 1;
 
     await prisma.$transaction(async (tx) => {
+      if (canPublishDirectly) {
+        await tx.$executeRaw`
+          UPDATE article_versions SET is_published = FALSE WHERE article_id = ${articleId};
+        `;
+      }
+
       await tx.$executeRaw`
         INSERT INTO article_versions (
           article_id,
@@ -267,6 +599,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
           content,
           edit_summary,
           is_published,
+          review_status,
           approver_id
         )
         VALUES (
@@ -276,6 +609,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
           ${JSON.stringify(content)}::jsonb,
           ${edit_summary || 'Update version ' + nextVersion},
           ${canPublishDirectly},
+          ${reviewStatus},
           ${canPublishDirectly ? userId : null}
         );
       `;
@@ -299,6 +633,8 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
             ON CONFLICT DO NOTHING;
           `;
         }
+
+        await syncArticleLinks(tx, articleId, article.wiki_id, content);
       }
     });
 
@@ -317,7 +653,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   }
 });
 
-// TOGGLE ARTICLE LOCK STATE
+// 8. TOGGLE ARTICLE LOCK STATE
 router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -344,12 +680,14 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
       });
     }
 
-    const updated = await prisma.$queryRaw`
-      UPDATE articles
-      SET is_locked = NOT is_locked
-      WHERE article_id = ${articleId}
-      RETURNING is_locked;
-    `;
+    const updated = await prisma.$transaction(async (tx) => {
+      return await tx.$queryRaw`
+        UPDATE articles
+        SET is_locked = NOT is_locked
+        WHERE article_id = ${articleId}
+        RETURNING is_locked;
+      `;
+    });
 
     const newState = updated[0].is_locked;
     res.status(200).json({
@@ -363,7 +701,7 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE ARTICLE
+// 9. DELETE ARTICLE
 router.delete('/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -391,6 +729,7 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
     }
 
     await prisma.$transaction([
+      prisma.$executeRaw`DELETE FROM article_links WHERE source_article_id = ${articleId} OR target_article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM article_media WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM reading_list_items WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM reports WHERE article_id = ${articleId};`,
@@ -408,11 +747,11 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// GET ARTICLE BY SLUG
-// 8. GET ARTICLE BY SLUG (Includes Similar Articles Query)
+// 10. GET ARTICLE BY SLUG
 router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   try {
     const { wikiSlug, articleSlug } = req.params;
+    const requestedVersion = req.query.v ? Number(req.query.v) : null;
     const userId = req.user?.user_id ? Number(req.user.user_id) : null;
 
     const articles = await prisma.$queryRaw`
@@ -431,7 +770,12 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
         a.created_at,
         w.title AS wiki_title,
         w.slug AS wiki_slug,
-        c.name AS category_name
+        c.name AS category_name,
+        (
+          SELECT COALESCE(MAX(av_pub.version_number), 1)::INT
+          FROM article_versions av_pub
+          WHERE av_pub.article_id = a.article_id AND av_pub.is_published = TRUE
+        ) AS current_published_version
       FROM articles a
       INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
       LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
@@ -453,22 +797,45 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
       if (membership.length > 0) userRole = membership[0].role;
     }
 
-    const versions = await prisma.$queryRaw`
-      SELECT 
-        av.version_id::INT AS version_id,
-        av.version_number::INT AS version_number,
-        av.content,
-        av.edit_summary,
-        av.created_at,
-        u.username AS author_name
-      FROM article_versions av
-      LEFT JOIN users u ON av.editor_id = u.user_id
-      WHERE av.article_id = ${article.article_id} AND av.is_published = TRUE
-      ORDER BY av.version_number DESC
-      LIMIT 1;
-    `;
+    let versions;
+    let isViewingHistorical = false;
 
-    // Query 3 similar published articles (matching topic category, or same wiki space as fallback)
+    if (requestedVersion) {
+      versions = await prisma.$queryRaw`
+        SELECT 
+          av.version_id::INT AS version_id,
+          av.version_number::INT AS version_number,
+          av.content,
+          av.edit_summary,
+          av.is_published,
+          av.review_status,
+          av.created_at,
+          u.username AS author_name
+        FROM article_versions av
+        LEFT JOIN users u ON av.editor_id = u.user_id
+        WHERE av.article_id = ${article.article_id} AND av.version_number = ${requestedVersion}
+        LIMIT 1;
+      `;
+      isViewingHistorical = true;
+    } else {
+      versions = await prisma.$queryRaw`
+        SELECT 
+          av.version_id::INT AS version_id,
+          av.version_number::INT AS version_number,
+          av.content,
+          av.edit_summary,
+          av.is_published,
+          av.review_status,
+          av.created_at,
+          u.username AS author_name
+        FROM article_versions av
+        LEFT JOIN users u ON av.editor_id = u.user_id
+        WHERE av.article_id = ${article.article_id} AND av.is_published = TRUE
+        ORDER BY av.version_number DESC
+        LIMIT 1;
+      `;
+    }
+
     let similarArticles = [];
     if (article.category_id) {
       similarArticles = await prisma.$queryRaw`
@@ -493,7 +860,6 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
       `;
     }
 
-    // Fallback: If no category or fewer than 3 category matches, pull from the same wiki space
     if (similarArticles.length < 3) {
       const existingIds = [article.article_id, ...similarArticles.map(a => a.article_id)];
       const needed = 3 - similarArticles.length;
@@ -522,12 +888,14 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
       similarArticles = [...similarArticles, ...wikiFallbacks];
     }
 
-    await prisma.$executeRaw`
-      UPDATE articles SET read_count = read_count + 1 WHERE article_id = ${article.article_id};
-    `;
-    await prisma.$executeRaw`
-      UPDATE wiki_spaces SET total_views = total_views + 1 WHERE wiki_id = ${article.wiki_id};
-    `;
+    if (!requestedVersion) {
+      await prisma.$executeRaw`
+        UPDATE articles SET read_count = read_count + 1 WHERE article_id = ${article.article_id};
+      `;
+      await prisma.$executeRaw`
+        UPDATE wiki_spaces SET total_views = total_views + 1 WHERE wiki_id = ${article.wiki_id};
+      `;
+    }
 
     res.status(200).json({
       success: true,
@@ -536,6 +904,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
         userRole
       },
       latestVersion: versions[0] || null,
+      isViewingHistorical,
       similarArticles
     });
   } catch (error) {
@@ -544,7 +913,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   }
 });
 
-// GET PENDING REVISIONS FOR MANAGED WIKIS
+// 11. PENDING REVIEWS (Filters by review_status = 'pending')
 router.get('/pending-reviews', authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.user_id);
@@ -571,7 +940,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
         INNER JOIN articles a ON av.article_id = a.article_id
         INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
         INNER JOIN users u ON av.editor_id = u.user_id
-        WHERE av.is_published = FALSE
+        WHERE av.review_status = 'pending'
         ORDER BY av.created_at ASC;
       `;
     } else {
@@ -595,7 +964,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
         INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
         INNER JOIN users u ON av.editor_id = u.user_id
         INNER JOIN wiki_memberships wm ON w.wiki_id = wm.wiki_id
-        WHERE wm.user_id = ${userId} AND av.is_published = FALSE
+        WHERE wm.user_id = ${userId} AND av.review_status = 'pending'
         ORDER BY av.created_at ASC;
       `;
     }
@@ -607,7 +976,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// REVIEW VERSION
+// 12. REVIEW REVISION (Updates review_status to 'approved' or 'rejected')
 router.post('/versions/:versionId/review', authenticateToken, async (req, res) => {
   try {
     const versionId = Number(req.params.versionId);
@@ -655,8 +1024,13 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
 
       await prisma.$transaction(async (tx) => {
         await tx.$executeRaw`
+          UPDATE article_versions SET is_published = FALSE WHERE article_id = ${ver.article_id};
+        `;
+
+        await tx.$executeRaw`
           UPDATE article_versions
           SET is_published = TRUE,
+              review_status = 'approved',
               approver_id = ${userId},
               approval_feedback = ${approval_feedback || 'Approved by author'}
           WHERE version_id = ${versionId};
@@ -677,6 +1051,8 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
             ON CONFLICT DO NOTHING;
           `;
         }
+
+        await syncArticleLinks(tx, ver.article_id, ver.wiki_id, ver.content);
       });
 
       return res.status(200).json({
@@ -685,12 +1061,17 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
       });
     } else {
       await prisma.$executeRaw`
-        DELETE FROM article_versions WHERE version_id = ${versionId};
+        UPDATE article_versions
+        SET review_status = 'rejected',
+            is_published = FALSE,
+            approver_id = ${userId},
+            approval_feedback = ${approval_feedback || 'Rejected by author'}
+        WHERE version_id = ${versionId};
       `;
 
       return res.status(200).json({
         success: true,
-        message: 'Revision rejected and discarded from review queue.'
+        message: 'Revision rejected.'
       });
     }
   } catch (error) {

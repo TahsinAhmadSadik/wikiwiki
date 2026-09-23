@@ -4,17 +4,36 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
+function extractFirstParagraph(content) {
+  if (!content) return '';
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return '';
+  const p = blocks.find((b) => b.type === 'paragraph' && (b.data?.text || b.text));
+  if (!p) {
+    const anyText = blocks.find((b) => b.data?.text || b.text);
+    return anyText ? (anyText.data?.text || anyText.text || '').trim().slice(0, 300) : '';
+  }
+  return (p.data?.text || p.text || '').trim().slice(0, 300);
+}
+
+function extractFirstImage(content) {
+  if (!content) return null;
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return null;
+  const imgBlock = blocks.find((b) => b.type === 'image' && (b.data?.url || b.url));
+  return imgBlock ? (imgBlock.data?.url || imgBlock.url || null) : null;
+}
+
 // 1. SUBMIT REPORT
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { article_id, version_id, reason } = req.body;
-    const reporterId = req.user.user_id;
+    const reporterId = Number(req.user.user_id);
 
     if (!article_id || !reason || !reason.trim()) {
       return res.status(400).json({ success: false, message: 'Article ID and reason are required' });
     }
 
-    // Check for existing pending report by this user on this article
     const existing = await prisma.$queryRaw`
       SELECT report_id 
       FROM reports 
@@ -52,10 +71,10 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. GET PENDING REPORTS
+// 2. GET PENDING REPORTS (Clean query branches without nested raw promises)
 router.get('/pending', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
     const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
 
     let reports;
@@ -75,8 +94,24 @@ router.get('/pending', authenticateToken, async (req, res) => {
           w.slug AS wiki_slug,
           av.version_number::INT AS version_number,
           ed.user_id::INT AS editor_id,
-          ed.username AS editor_name,
-          ed.demerit_points::INT AS editor_demerits
+          COALESCE(ed.username, 'Contributor') AS editor_name,
+          COALESCE(ed.demerit_points, 0)::INT AS editor_demerits,
+          (
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'version_id', av2.version_id,
+                  'version_number', av2.version_number,
+                  'edit_summary', COALESCE(av2.edit_summary, 'No summary'),
+                  'is_published', av2.is_published,
+                  'created_at', av2.created_at
+                ) ORDER BY av2.version_number DESC
+              ),
+              '[]'::json
+            )
+            FROM article_versions av2
+            WHERE av2.article_id = r.article_id
+          ) AS available_versions
         FROM reports r
         INNER JOIN articles a ON r.article_id = a.article_id
         INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
@@ -102,8 +137,24 @@ router.get('/pending', authenticateToken, async (req, res) => {
           w.slug AS wiki_slug,
           av.version_number::INT AS version_number,
           ed.user_id::INT AS editor_id,
-          ed.username AS editor_name,
-          ed.demerit_points::INT AS editor_demerits
+          COALESCE(ed.username, 'Contributor') AS editor_name,
+          COALESCE(ed.demerit_points, 0)::INT AS editor_demerits,
+          (
+            SELECT COALESCE(
+              json_agg(
+                json_build_object(
+                  'version_id', av2.version_id,
+                  'version_number', av2.version_number,
+                  'edit_summary', COALESCE(av2.edit_summary, 'No summary'),
+                  'is_published', av2.is_published,
+                  'created_at', av2.created_at
+                ) ORDER BY av2.version_number DESC
+              ),
+              '[]'::json
+            )
+            FROM article_versions av2
+            WHERE av2.article_id = r.article_id
+          ) AS available_versions
         FROM reports r
         INNER JOIN articles a ON r.article_id = a.article_id
         INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
@@ -123,20 +174,20 @@ router.get('/pending', authenticateToken, async (req, res) => {
   }
 });
 
-// 3. RESOLVE REPORT (CALLS STORED PROCEDURE)
+// 3. RESOLVE REPORT (Calls Stored Procedure with Optional Rollback)
 router.post('/:reportId/resolve', authenticateToken, async (req, res) => {
   try {
     const reportId = Number(req.params.reportId);
     const resolverId = Number(req.user.user_id);
     const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
-    const { action, demerit_points = 0 } = req.body;
+    const { action, demerit_points = 0, rollback_version_id = null } = req.body;
 
     if (!['resolved', 'dismissed'].includes(action)) {
       return res.status(400).json({ success: false, message: 'Action must be "resolved" or "dismissed"' });
     }
 
     const reportRows = await prisma.$queryRaw`
-      SELECT r.report_id, a.wiki_id
+      SELECT r.report_id, r.article_id, a.wiki_id
       FROM reports r
       INNER JOIN articles a ON r.article_id = a.article_id
       WHERE r.report_id = ${reportId}
@@ -159,22 +210,42 @@ router.post('/:reportId/resolve', authenticateToken, async (req, res) => {
     }
 
     const demerits = action === 'resolved' ? Number(demerit_points) : 0;
+    const rollbackVerId = (action === 'resolved' && rollback_version_id) ? Number(rollback_version_id) : null;
 
     await prisma.$executeRaw`
-    CALL sp_resolve_report_and_penalize(
-        ${reportId},
-        ${resolverId},
-        ${action},
-        ${demerits}
-    );
+      CALL sp_resolve_report_and_penalize(
+          ${reportId}::BIGINT,
+          ${resolverId}::BIGINT,
+          ${action}::TEXT,
+          ${demerits}::BIGINT,
+          ${rollbackVerId}::BIGINT
+      );
     `;
 
-    res.status(200).json({
-      success: true,
-      message: action === 'resolved'
-        ? `Report resolved with ${demerits} demerit points issued.`
-        : 'Report dismissed with no action taken.'
-    });
+    if (rollbackVerId) {
+      const verData = await prisma.$queryRaw`
+        SELECT content FROM article_versions WHERE version_id = ${rollbackVerId} LIMIT 1;
+      `;
+      if (verData.length > 0) {
+        const excerpt = extractFirstParagraph(verData[0].content);
+        const thumbnail = extractFirstImage(verData[0].content);
+        await prisma.$executeRaw`
+          UPDATE articles
+          SET description = ${excerpt}, thumbnail_url = ${thumbnail}
+          WHERE article_id = ${report.article_id};
+        `;
+      }
+    }
+
+    let successMsg = action === 'resolved'
+      ? `Report resolved with ${demerits} demerit points issued.`
+      : 'Report dismissed with no action taken.';
+
+    if (rollbackVerId) {
+      successMsg += ' Article successfully rolled back to chosen version.';
+    }
+
+    res.status(200).json({ success: true, message: successMsg });
   } catch (error) {
     console.error('Resolve report error:', error);
     res.status(500).json({

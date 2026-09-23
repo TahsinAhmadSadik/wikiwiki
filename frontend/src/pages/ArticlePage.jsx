@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import WikiHoverCard from '../components/WikiHoverCard';
 import { useAuth } from '../context/AuthContext';
@@ -16,7 +16,6 @@ function parseArticleContent(text, currentWikiSlug) {
   return parts.map((part, index) => {
     if (!part) return null;
 
-    // 1. Double Bracket Wiki Syntax: [[Title]] or [[Target|Display Label]]
     if (part.startsWith('[[') && part.endsWith(']]')) {
       const inner = part.slice(2, -2).trim();
       let target = inner;
@@ -39,7 +38,6 @@ function parseArticleContent(text, currentWikiSlug) {
       );
     }
 
-    // 2. Standard Markdown Link Syntax: [Label](url)
     const mdMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
     if (mdMatch) {
       const label = mdMatch[1];
@@ -95,6 +93,8 @@ function parseArticleContent(text, currentWikiSlug) {
 
 export default function ArticlePage() {
   const { wikiSlug, articleSlug } = useParams();
+  const [searchParams] = useSearchParams();
+  const requestedVersion = searchParams.get('v');
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -103,35 +103,118 @@ export default function ArticlePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Version History States
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [versionHistory, setVersionHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [rollingBack, setRollingBack] = useState(false);
+
+  // Custom Modal States (Replacing browser alerts & confirms)
+  const [versionToRollback, setVersionToRollback] = useState(null);
+  const [isRollbackConfirmOpen, setIsRollbackConfirmOpen] = useState(false);
+  const [alertModalState, setAlertModalState] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    isError: false
+  });
+
+  // Report modal states
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [reportStatus, setReportStatus] = useState({ text: '', type: '' });
 
+  // Bookmark states
   const [isBookmarkOpen, setIsBookmarkOpen] = useState(false);
   const [readingLists, setReadingLists] = useState([]);
   const [newListTitle, setNewListTitle] = useState('');
   const [creatingList, setCreatingList] = useState(false);
 
+  // Management & Deletion states
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [lockStatusMsg, setLockStatusMsg] = useState('');
 
+  const fetchArticle = useCallback(async (versionOverride) => {
+    setLoading(true);
+    setError('');
+    try {
+      const vParam = versionOverride !== undefined ? versionOverride : requestedVersion;
+      const url = vParam
+        ? `/articles/${wikiSlug}/${articleSlug}?v=${vParam}`
+        : `/articles/${wikiSlug}/${articleSlug}`;
+      const res = await api.get(url);
+      setData(res);
+      setSimilarArticles(res.similarArticles || []);
+    } catch (err) {
+      setError(err.data?.message || err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [wikiSlug, articleSlug, requestedVersion]);
+
   useEffect(() => {
-    const fetchArticle = async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const res = await api.get(`/articles/${wikiSlug}/${articleSlug}`);
-        setData(res);
-        setSimilarArticles(res.similarArticles || []);
-      } catch (err) {
-        setError(err.data?.message || err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchArticle();
-  }, [wikiSlug, articleSlug]);
+  }, [fetchArticle]);
+
+  const loadVersionHistory = async () => {
+    if (!data?.article?.article_id) return;
+    setLoadingHistory(true);
+    try {
+      const res = await api.get(`/articles/${data.article.article_id}/versions`);
+      setVersionHistory(res.versions || []);
+      setIsHistoryOpen(true);
+    } catch (err) {
+      setAlertModalState({
+        isOpen: true,
+        title: 'Error',
+        message: err.data?.message || err.message || 'Failed to load version history.',
+        isError: true
+      });
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  // Trigger modal confirmation
+  const handlePromptRollback = (ver) => {
+    setIsHistoryOpen(false);
+    setVersionToRollback(ver);
+    setIsRollbackConfirmOpen(true);
+  };
+
+  // Execute restore and refresh the page data
+  const handleConfirmRollback = async () => {
+    if (!versionToRollback) return;
+    setRollingBack(true);
+    try {
+      const res = await api.post(`/articles/${data.article.article_id}/rollback`, {
+        version_id: versionToRollback.version_id
+      });
+
+      setIsRollbackConfirmOpen(false);
+      setIsHistoryOpen(false);
+
+      // Clear ?v= from URL
+      navigate(`/wiki/${wikiSlug}/${articleSlug}`, { replace: true });
+
+      // Immediately fetch live article data so UI refreshes without manual reload
+      await fetchArticle(null);
+
+      setLockStatusMsg(res.message || `Successfully restored Version ${versionToRollback.version_number}`);
+      setTimeout(() => setLockStatusMsg(''), 4000);
+      setVersionToRollback(null);
+    } catch (err) {
+      setAlertModalState({
+        isOpen: true,
+        title: 'Rollback Failed',
+        message: err.data?.message || err.message || 'Failed to restore target version.',
+        isError: true
+      });
+    } finally {
+      setRollingBack(false);
+    }
+  };
 
   const handleSubmitReport = async (e) => {
     e.preventDefault();
@@ -204,7 +287,12 @@ export default function ArticlePage() {
       setLockStatusMsg(res.message);
       setTimeout(() => setLockStatusMsg(''), 3000);
     } catch (err) {
-      alert(err.data?.message || err.message || 'Failed to update lock status');
+      setAlertModalState({
+        isOpen: true,
+        title: 'Action Failed',
+        message: err.data?.message || err.message || 'Failed to update lock status.',
+        isError: true
+      });
     }
   };
 
@@ -214,9 +302,14 @@ export default function ArticlePage() {
       await api.delete(`/articles/${data.article.article_id}`);
       navigate(`/wiki/${data.article.wiki_slug || wikiSlug}`);
     } catch (err) {
-      alert(err.data?.message || err.message || 'Failed to delete article');
-      setDeleting(false);
       setIsDeleteModalOpen(false);
+      setDeleting(false);
+      setAlertModalState({
+        isOpen: true,
+        title: 'Deletion Failed',
+        message: err.data?.message || err.message || 'Failed to delete article.',
+        isError: true
+      });
     }
   };
 
@@ -228,7 +321,7 @@ export default function ArticlePage() {
   if (loading) return <div style={{ color: '#71717a', padding: '2rem' }}>Loading article...</div>;
   if (error) return <div style={{ color: '#ef4444', padding: '2rem' }}>{error}</div>;
 
-  const { article, latestVersion } = data;
+  const { article, latestVersion, isViewingHistorical } = data;
   const blocks = latestVersion?.content?.blocks || [];
   const isGlobal = ['owner', 'admin'].includes(user?.global_role);
   const isAuthorOrCoAuthor = ['author', 'co_author'].includes(article.userRole);
@@ -239,7 +332,235 @@ export default function ArticlePage() {
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
       <Navbar />
 
-      {/* CONFIRM DELETE MODAL */}
+      {/* 1. CUSTOM GENERAL ALERT / ERROR MODAL */}
+      {alertModalState.isOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 440 }}>
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.2rem', color: alertModalState.isError ? '#ef4444' : '#fff' }}>
+              {alertModalState.title}
+            </h3>
+            <p style={{ color: '#a1a1aa', fontSize: '0.875rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
+              {alertModalState.message}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setAlertModalState({ isOpen: false, title: '', message: '', isError: false })}
+                className="auth-btn"
+                style={{ width: 'auto', padding: '0.45rem 1.25rem' }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. CUSTOM CONFIRM ROLLBACK MODAL */}
+      {isRollbackConfirmOpen && versionToRollback && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 460 }}>
+            <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.25rem', color: '#eab308' }}>
+              Restore Version {versionToRollback.version_number}?
+            </h3>
+            <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
+              Are you sure you want to restore <strong>Version {versionToRollback.version_number}</strong> as the active published revision?
+              This will update the live article, metadata excerpts, and referenced knowledge links.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+              <button
+                type="button"
+                disabled={rollingBack}
+                onClick={() => {
+                  setIsRollbackConfirmOpen(false);
+                  setVersionToRollback(null);
+                }}
+                style={{
+                  backgroundColor: 'transparent',
+                  color: '#a1a1aa',
+                  border: '1px solid #27272a',
+                  padding: '0.45rem 1rem',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={rollingBack}
+                onClick={handleConfirmRollback}
+                className="auth-btn"
+                style={{
+                  width: 'auto',
+                  backgroundColor: '#eab308',
+                  borderColor: '#eab308',
+                  color: '#000',
+                  fontWeight: 600,
+                  padding: '0.45rem 1.25rem'
+                }}
+              >
+                {rollingBack ? 'Restoring...' : 'Yes, Restore Version'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. HISTORICAL VERSION ARCHIVE BANNER */}
+      {isViewingHistorical && (
+        <div style={{
+          backgroundColor: '#18181b',
+          borderBottom: '1px solid #eab308',
+          padding: '0.85rem 1.5rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.75rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fef08a', fontSize: '0.875rem' }}>
+            <span>⚠️</span>
+            <span>
+              Viewing <strong>Archived Snapshot (Version {latestVersion.version_number})</strong>. The live version is <strong>Version {article.current_published_version}</strong>.
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <Link
+              to={`/wiki/${wikiSlug}/${articleSlug}`}
+              style={{
+                backgroundColor: 'transparent',
+                color: '#f4f4f5',
+                border: '1px solid #3f3f46',
+                padding: '0.3rem 0.75rem',
+                borderRadius: 4,
+                fontSize: '0.78rem',
+                textDecoration: 'none'
+              }}
+            >
+              View Live Version →
+            </Link>
+
+            {canManageArticle && (
+              <button
+                type="button"
+                disabled={rollingBack}
+                onClick={() => handlePromptRollback(latestVersion)}
+                style={{
+                  backgroundColor: '#eab308',
+                  color: '#000',
+                  border: 'none',
+                  fontWeight: 600,
+                  padding: '0.3rem 0.85rem',
+                  borderRadius: 4,
+                  fontSize: '0.78rem',
+                  cursor: 'pointer'
+                }}
+              >
+                {rollingBack ? 'Restoring...' : '↺ Restore / Publish This Version'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 4. VERSION HISTORY MODAL */}
+      {isHistoryOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 620, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '0.85rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.25rem' }}>Revision History</h3>
+                <span style={{ fontSize: '0.8rem', color: '#71717a' }}>{article.title}</span>
+              </div>
+              <button
+                onClick={() => setIsHistoryOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: '1.25rem' }}
+              >
+                ✕
+              </button>
+            </header>
+
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {versionHistory.map((ver) => (
+                <div
+                  key={ver.version_id}
+                  style={{
+                    backgroundColor: ver.is_published ? 'rgba(16, 185, 129, 0.08)' : '#141417',
+                    border: ver.is_published ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid #27272a',
+                    padding: '0.85rem 1rem',
+                    borderRadius: 6,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center'
+                  }}
+                >
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                      <span style={{ fontWeight: 600, fontSize: '0.95rem', color: '#fff' }}>
+                        Version {ver.version_number}
+                      </span>
+                      {ver.is_published && (
+                        <span style={{ fontSize: '0.68rem', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', padding: '0.1rem 0.45rem', borderRadius: 9999 }}>
+                          ✓ Live
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.8rem', color: '#a1a1aa' }}>
+                      {ver.edit_summary}
+                    </p>
+                    <span style={{ fontSize: '0.72rem', color: '#71717a' }}>
+                      Edited by {ver.editor_name || 'Contributor'} on {new Date(ver.created_at).toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.45rem' }}>
+                    <Link
+                      to={`/wiki/${wikiSlug}/${articleSlug}?v=${ver.version_number}`}
+                      onClick={() => setIsHistoryOpen(false)}
+                      style={{
+                        backgroundColor: '#18181b',
+                        border: '1px solid #3f3f46',
+                        color: '#f4f4f5',
+                        padding: '0.35rem 0.65rem',
+                        borderRadius: 4,
+                        fontSize: '0.75rem',
+                        textDecoration: 'none'
+                      }}
+                    >
+                      View Snapshot
+                    </Link>
+
+                    {canManageArticle && !ver.is_published && (
+                      <button
+                        type="button"
+                        disabled={rollingBack}
+                        onClick={() => handlePromptRollback(ver)}
+                        style={{
+                          backgroundColor: 'rgba(234, 179, 8, 0.15)',
+                          border: '1px solid rgba(234, 179, 8, 0.4)',
+                          color: '#eab308',
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: 4,
+                          fontSize: '0.75rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. CONFIRM DELETE MODAL */}
       {isDeleteModalOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 460 }}>
@@ -247,7 +568,7 @@ export default function ArticlePage() {
               Delete Article Permanently?
             </h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
-              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, and bookmarked list entries.
+              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, and bookmarked list entries[cite: 22].
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -281,13 +602,13 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* REPORT MODAL */}
+      {/* 6. REPORT MODAL */}
       {isReportOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 480 }}>
             <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.2rem' }}>Report Article</h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: '0 0 1rem 0' }}>
-              Flag inaccurate information, vandalism, or policy violations to the moderators.
+              Flag inaccurate information, vandalism, or policy violations to the moderators[cite: 22].
             </p>
 
             {reportStatus.text && (
@@ -361,6 +682,24 @@ export default function ArticlePage() {
 
             {/* ACTION CONTROLS */}
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={loadVersionHistory}
+                disabled={loadingHistory}
+                style={{
+                  backgroundColor: '#18181b',
+                  border: '1px solid #27272a',
+                  color: '#f4f4f5',
+                  borderRadius: 6,
+                  padding: '0.5rem 0.85rem',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem'
+                }}
+                title="View Revision History"
+              >
+                🕒 History (v{latestVersion?.version_number})
+              </button>
+
               {canManageArticle && (
                 <>
                   <button
@@ -624,7 +963,7 @@ export default function ArticlePage() {
           )}
         </article>
 
-        {/* SIMILAR / RELATED ARTICLES SECTION */}
+        {/* RELATED ARTICLES SECTION */}
         {similarArticles.length > 0 && (
           <section style={{ borderTop: '1px solid #1f1f23', paddingTop: '2.5rem', marginBottom: '2rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
@@ -633,7 +972,7 @@ export default function ArticlePage() {
                   Related Articles
                 </h3>
                 <span style={{ fontSize: '0.8rem', color: '#71717a' }}>
-                  More topics from {article.category_name} and {article.wiki_title}
+                  More topics from {article.category_name || article.wiki_title}
                 </span>
               </div>
             </div>
@@ -657,7 +996,6 @@ export default function ArticlePage() {
                   }}
                 >
                   <div>
-                    {/* Thumbnail banner */}
                     <div style={{
                       height: 110,
                       width: '100%',

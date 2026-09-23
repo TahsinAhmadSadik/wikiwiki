@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -73,63 +74,76 @@ router.post('/', authenticateToken, async (req, res) => {
     const thumbnail = extractFirstImage(content);
     const mediaIds = extractMediaIds(content);
 
-    const result = await prisma.$transaction(async (tx) => {
-      const articleRows = await tx.$queryRaw`
-        INSERT INTO articles (
-          wiki_id,
-          category_id,
-          title,
-          slug,
-          description,
-          thumbnail_url,
-          template_type,
-          is_published
-        )
-        VALUES (
-          ${Number(wiki_id)},
-          ${resolvedCategoryId},
-          ${title.trim()},
-          ${slug},
-          ${excerpt},
-          ${thumbnail},
-          ${template_type},
-          ${canPublishDirectly}
-        )
-        RETURNING article_id::INT AS article_id, wiki_id::INT AS wiki_id, slug, title;
-      `;
-      const article = articleRows[0];
+const result = await withTransaction(async (client) => {
+  const articleResult = await client.query(
+    `
+      INSERT INTO articles (
+        wiki_id,
+        category_id,
+        title,
+        slug,
+        description,
+        thumbnail_url,
+        template_type,
+        is_published
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING article_id::INT AS article_id,
+                wiki_id::INT AS wiki_id,
+                slug,
+                title
+    `,
+    [
+      Number(wiki_id),
+      resolvedCategoryId,
+      title.trim(),
+      slug,
+      excerpt,
+      thumbnail,
+      template_type,
+      canPublishDirectly
+    ]
+  );
 
-      await tx.$executeRaw`
-        INSERT INTO article_versions (
-          article_id,
-          editor_id,
-          version_number,
-          content,
-          edit_summary,
-          is_published,
-          approver_id
-        )
-        VALUES (
-          ${article.article_id},
-          ${userId},
-          1,
-          ${JSON.stringify(content)}::jsonb,
-          ${edit_summary || 'Initial creation'},
-          ${canPublishDirectly},
-          ${canPublishDirectly ? userId : null}
-        );
-      `;
+  const article = articleResult.rows[0];
 
-      for (const mId of mediaIds) {
-        await tx.$executeRaw`
-          INSERT INTO article_media (article_id, media_id)
-          VALUES (${article.article_id}, ${mId})
-          ON CONFLICT DO NOTHING;
-        `;
-      }
+  await client.query(
+    `
+      INSERT INTO article_versions (
+        article_id,
+        editor_id,
+        version_number,
+        content,
+        edit_summary,
+        is_published,
+        approver_id
+      )
+      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+    `,
+    [
+      article.article_id,
+      userId,
+      1,
+      JSON.stringify(content),
+      edit_summary || 'Initial creation',
+      canPublishDirectly,
+      canPublishDirectly ? userId : null
+    ]
+  );
 
-      return article;
-    });
+  for (const mId of mediaIds) {
+    await client.query(
+      `
+        INSERT INTO article_media (article_id, media_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+      `,
+      [article.article_id, mId]
+    );
+  }
+
+  return article;
+});
 
     res.status(201).json({
       success: true,
@@ -258,49 +272,58 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
     `;
     const nextVersion = maxVer[0].next_num + 1;
 
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`
-        INSERT INTO article_versions (
-          article_id,
-          editor_id,
-          version_number,
-          content,
-          edit_summary,
-          is_published,
-          approver_id
-        )
-        VALUES (
-          ${articleId},
-          ${userId},
-          ${nextVersion},
-          ${JSON.stringify(content)}::jsonb,
-          ${edit_summary || 'Update version ' + nextVersion},
-          ${canPublishDirectly},
-          ${canPublishDirectly ? userId : null}
-        );
-      `;
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      INSERT INTO article_versions (
+        article_id,
+        editor_id,
+        version_number,
+        content,
+        edit_summary,
+        is_published,
+        approver_id
+      )
+      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)
+    `,
+    [
+      articleId,
+      userId,
+      nextVersion,
+      JSON.stringify(content),
+      edit_summary || 'Update version ' + nextVersion,
+      canPublishDirectly,
+      canPublishDirectly ? userId : null
+    ]
+  );
 
-      if (canPublishDirectly) {
-        const excerpt = extractFirstParagraph(content);
-        const thumbnail = extractFirstImage(content);
-        const mediaIds = extractMediaIds(content);
+  if (canPublishDirectly) {
+    const excerpt = extractFirstParagraph(content);
+    const thumbnail = extractFirstImage(content);
+    const mediaIds = extractMediaIds(content);
 
-        await tx.$executeRaw`
-          UPDATE articles 
-          SET description = ${excerpt},
-              thumbnail_url = ${thumbnail}
-          WHERE article_id = ${articleId};
-        `;
+    await client.query(
+      `
+        UPDATE articles
+        SET description = $1,
+            thumbnail_url = $2
+        WHERE article_id = $3
+      `,
+      [excerpt, thumbnail, articleId]
+    );
 
-        for (const mId of mediaIds) {
-          await tx.$executeRaw`
-            INSERT INTO article_media (article_id, media_id)
-            VALUES (${articleId}, ${mId})
-            ON CONFLICT DO NOTHING;
-          `;
-        }
-      }
-    });
+    for (const mId of mediaIds) {
+      await client.query(
+        `
+          INSERT INTO article_media (article_id, media_id)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING
+        `,
+        [articleId, mId]
+      );
+    }
+  }
+});
 
     res.status(201).json({
       success: true,
@@ -343,13 +366,19 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
         message: 'Only wiki authors or administrators can lock or unlock articles.'
       });
     }
-
-    const updated = await prisma.$queryRaw`
+const updated = await withTransaction(async (client) => {
+  const result = await client.query(
+    `
       UPDATE articles
       SET is_locked = NOT is_locked
-      WHERE article_id = ${articleId}
-      RETURNING is_locked;
-    `;
+      WHERE article_id = $1
+      RETURNING is_locked
+    `,
+    [articleId]
+  );
+
+  return result.rows;
+});
 
     const newState = updated[0].is_locked;
     res.status(200).json({
@@ -390,13 +419,47 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
       });
     }
 
-    await prisma.$transaction([
-      prisma.$executeRaw`DELETE FROM article_media WHERE article_id = ${articleId};`,
-      prisma.$executeRaw`DELETE FROM reading_list_items WHERE article_id = ${articleId};`,
-      prisma.$executeRaw`DELETE FROM reports WHERE article_id = ${articleId};`,
-      prisma.$executeRaw`DELETE FROM article_versions WHERE article_id = ${articleId};`,
-      prisma.$executeRaw`DELETE FROM articles WHERE article_id = ${articleId};`
-    ]);
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM article_media
+      WHERE article_id = $1
+    `,
+    [articleId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM reading_list_items
+      WHERE article_id = $1
+    `,
+    [articleId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM reports
+      WHERE article_id = $1
+    `,
+    [articleId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM article_versions
+      WHERE article_id = $1
+    `,
+    [articleId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM articles
+      WHERE article_id = $1
+    `,
+    [articleId]
+  );
+});
 
     res.status(200).json({
       success: true,
@@ -464,13 +527,25 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
       LIMIT 1;
     `;
 
-    await prisma.$executeRaw`
-      UPDATE articles SET read_count = read_count + 1 WHERE article_id = ${article.article_id};
-    `;
-    await prisma.$executeRaw`
-      UPDATE wiki_spaces SET total_views = total_views + 1 WHERE wiki_id = ${article.wiki_id};
-    `;
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      UPDATE articles
+      SET read_count = read_count + 1
+      WHERE article_id = $1
+    `,
+    [article.article_id]
+  );
 
+  await client.query(
+    `
+      UPDATE wiki_spaces
+      SET total_views = total_views + 1
+      WHERE wiki_id = $1
+    `,
+    [article.wiki_id]
+  );
+});
     res.status(200).json({
       success: true,
       article: {
@@ -594,41 +669,63 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
       const thumbnail = extractFirstImage(ver.content);
       const mediaIds = extractMediaIds(ver.content);
 
-      await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`
-          UPDATE article_versions
-          SET is_published = TRUE,
-              approver_id = ${userId},
-              approval_feedback = ${approval_feedback || 'Approved by author'}
-          WHERE version_id = ${versionId};
-        `;
+     await withTransaction(async (client) => {
+  await client.query(
+    `
+      UPDATE article_versions
+      SET is_published = TRUE,
+          approver_id = $1,
+          approval_feedback = $2
+      WHERE version_id = $3
+    `,
+    [
+      userId,
+      approval_feedback || 'Approved by author',
+      versionId
+    ]
+  );
 
-        await tx.$executeRaw`
-          UPDATE articles
-          SET is_published = TRUE,
-              description = ${excerpt},
-              thumbnail_url = ${thumbnail}
-          WHERE article_id = ${ver.article_id};
-        `;
+  await client.query(
+    `
+      UPDATE articles
+      SET is_published = TRUE,
+          description = $1,
+          thumbnail_url = $2
+      WHERE article_id = $3
+    `,
+    [
+      excerpt,
+      thumbnail,
+      ver.article_id
+    ]
+  );
 
-        for (const mId of mediaIds) {
-          await tx.$executeRaw`
-            INSERT INTO article_media (article_id, media_id)
-            VALUES (${ver.article_id}, ${mId})
-            ON CONFLICT DO NOTHING;
-          `;
-        }
-      });
+  for (const mId of mediaIds) {
+    await client.query(
+      `
+        INSERT INTO article_media (article_id, media_id)
+        VALUES ($1, $2)
+        ON CONFLICT DO NOTHING
+      `,
+      [ver.article_id, mId]
+    );
+  }
+});
 
       return res.status(200).json({
         success: true,
         message: 'Revision approved! The new version is now published live.'
       });
     } else {
-      await prisma.$executeRaw`
-        DELETE FROM article_versions WHERE version_id = ${versionId};
-      `;
-
+    await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM article_versions
+      WHERE version_id = $1
+    `,
+    [versionId]
+  );
+});
       return res.status(200).json({
         success: true,
         message: 'Revision rejected and discarded from review queue.'

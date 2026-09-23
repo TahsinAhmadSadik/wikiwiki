@@ -182,4 +182,53 @@ router.get('/cross-topic-leaderboard', async (req, res) => {
   }
 });
 
+
+// GET /api/stats/topic-read-distribution
+router.get('/topic-read-distribution', async (req, res) => {
+  try {
+    const distribution = await prisma.$queryRaw`
+      SELECT
+        c.name AS category_name,
+        SUM(a.read_count)::INT AS total_reads
+      FROM articles a
+      INNER JOIN wiki_spaces w
+        ON a.wiki_id = w.wiki_id
+      INNER JOIN categories c
+        ON c.category_id = COALESCE(a.category_id, w.category_id)
+      WHERE a.is_published = TRUE
+      GROUP BY c.category_id, c.name
+      ORDER BY total_reads DESC;
+    `;
+
+    res.status(200).json({
+      success: true,
+      data: distribution
+    });
+  } catch (error) {
+    console.error('Fetch topic read distribution error:', error);
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch topic read distribution'
+    });
+  }
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 export default router;

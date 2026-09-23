@@ -309,12 +309,6 @@ UPDATE users SET global_role = 'owner' WHERE email = 'tahsinahmadsadik@gmail.com
 
 
 
-
-
-
-
-
-
 -- ============================================================================
 -- 1. TRIGGER: Automatic Full-Text Search Vector Generator
 -- ============================================================================

@@ -5,6 +5,26 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import '../styles/auth.css';
 
+import {
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts';
+
+
+const PIE_COLORS = [
+  '#a855f7',
+  '#3b82f6',
+  '#10b981',
+  '#f59e0b',
+  '#ef4444',
+  '#06b6d4',
+  '#ec4899',
+  '#8b5cf6'
+];
 export default function HomePage() {
   const { user } = useAuth();
 
@@ -21,6 +41,9 @@ export default function HomePage() {
   const [topicArticles, setTopicArticles] = useState([]);
   const [crossTopicArticles, setCrossTopicArticles] = useState([]);
 
+  //pie chart 
+  const [topicReadDistribution, setTopicReadDistribution] = useState([]);
+
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -30,15 +53,16 @@ export default function HomePage() {
   useEffect(() => {
     const fetchLandingData = async () => {
       try {
-        const [catRes, velRes, topRes] = await Promise.all([
+        const [catRes, velRes, topRes, distributionRes] = await Promise.all([
           api.get('/categories'),
           api.get('/stats/wiki-velocity?limit=4'),
-          api.get('/stats/top-reads?limit=6')
+          api.get('/stats/top-reads?limit=6'),
+          api.get('/stats/topic-read-distribution')
         ]);
-
         setCategories(catRes.categories || []);
         setVelocityWikis(velRes.data || []);
         setTopReads(topRes.data || []);
+        setTopicReadDistribution(distributionRes.data || []);
 
         if (catRes.categories?.length > 0) {
           setSelectedCategory(String(catRes.categories[0].category_id));
@@ -272,6 +296,21 @@ export default function HomePage() {
               >
                 Cross-Topic Matrix (Stat 3)
               </button>
+              <button
+                type="button"
+                onClick={() => setStatTab('topic-distribution')}
+                style={{
+                  background: statTab === 'topic-distribution' ? '#27272a' : 'transparent',
+                  color: statTab === 'topic-distribution' ? '#fff' : '#a1a1aa',
+                  border: 'none',
+                  padding: '0.4rem 0.85rem',
+                  borderRadius: 4,
+                  fontSize: '0.8rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Readership Distribution (Stat 4)
+              </button>
             </div>
           </div>
 
@@ -424,6 +463,75 @@ export default function HomePage() {
               )}
             </div>
           )}
+          {/* STAT 4: READERSHIP DISTRIBUTION */}
+          {statTab === 'topic-distribution' && (
+            <div>
+              <h3 style={{
+                margin: '0 0 0.5rem 0',
+                fontSize: '1.1rem'
+              }}>
+                Readership Distribution by Topic
+              </h3>
+
+              <p style={{
+                color: '#71717a',
+                fontSize: '0.8rem',
+                marginBottom: '1rem'
+              }}>
+                Percentage of total article reads contributed by each topic.
+              </p>
+
+              {topicReadDistribution.length === 0 ? (
+                <p style={{
+                  color: '#71717a',
+                  margin: 0
+                }}>
+                  No readership data available.
+                </p>
+              ) : (
+                <div style={{
+                  width: '100%',
+                  height: 400
+                }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={topicReadDistribution}
+                        dataKey="total_reads"
+                        nameKey="category_name"
+                        cx="50%"
+                        cy="50%"
+                        outerRadius={130}
+                        label={({ category_name, percent }) =>
+                          `${category_name} ${(percent * 100).toFixed(1)}%`
+                        }
+                      >
+                        {topicReadDistribution.map((entry, index) => (
+                          <Cell
+                            key={`cell-${index}`}
+                            fill={PIE_COLORS[index % PIE_COLORS.length]}
+                          />
+                        ))}
+                      </Pie>
+
+                      <Tooltip
+                        formatter={(value) => [`${value} reads`, 'Total Reads']}
+                      />
+
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          )}
+
+
+
+
+
+
+
         </section>
 
         {/* 4. "FOR YOU" FEED (WITH ARTICLE THUMBNAILS) */}

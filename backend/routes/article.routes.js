@@ -34,7 +34,211 @@ function extractMediaIds(content) {
     .filter((id) => !isNaN(id) && id > 0);
 }
 
-// CREATE ARTICLE (POST /api/articles)
+// Extract candidate link targets (supporting Markdown [Text](url) and [[Wiki Links]])
+function extractLinkCandidates(content) {
+  if (!content) return [];
+  const blocks = Array.isArray(content) ? content : content.blocks;
+  if (!Array.isArray(blocks)) return [];
+
+  const candidates = new Set();
+
+  for (const block of blocks) {
+    const text = block.data?.text || block.text || '';
+    if (typeof text !== 'string') continue;
+
+    // 1. Double bracket syntax: [[Article Title]] or [[wiki-slug/article-slug|Label]]
+    const wikiLinkRegex = /\[\[([^\]\vert{}]+)(?:\Vert{}[^\]]+)?\]\]/g;
+    let match;
+    while ((match = wikiLinkRegex.exec(text)) !== null) {
+      const raw = match[1].trim();
+      if (raw) candidates.add(raw);
+    }
+
+    // 2. Standard markdown link syntax: [Label](/wiki/wiki-slug/article-slug) or [Label](article-slug)
+    const mdLinkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    while ((match = mdLinkRegex.exec(text)) !== null) {
+      const href = match[2].trim();
+      const wikiPathMatch = href.match(/\/wiki\/([^\/\s#?]+)\/([^\/\s#?]+)/);
+      if (wikiPathMatch) {
+        candidates.add(wikiPathMatch[2]);
+      } else {
+        const simpleSlug = href.replace(/^\/+/, '').split(/[?#]/)[0];
+        if (simpleSlug && !simpleSlug.startsWith('http') && !simpleSlug.startsWith('#')) {
+          candidates.add(simpleSlug);
+        }
+      }
+    }
+  }
+
+  return Array.from(candidates);
+}
+
+// Synchronize target article IDs into the article_links junction table
+async function syncArticleLinks(tx, sourceArticleId, wikiId, content) {
+  const candidates = extractLinkCandidates(content);
+
+  // Clear previous outgoing links to maintain referential freshness
+  await tx.$executeRaw`
+    DELETE FROM article_links WHERE source_article_id = ${sourceArticleId};
+  `;
+
+  if (candidates.length === 0) return;
+
+  const targetIds = new Set();
+
+  for (const candidate of candidates) {
+    let cleanCandidate = candidate.trim();
+    if (cleanCandidate.includes('/')) {
+      const parts = cleanCandidate.replace(/^\/+|\/+$/g, '').split('/');
+      if (parts.length >= 2) {
+        cleanCandidate = parts[1];
+      }
+    }
+
+    const slugified = cleanCandidate.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+    const lowerCandidate = cleanCandidate.toLowerCase();
+
+    const matches = await tx.$queryRaw`
+      SELECT article_id::INT AS article_id
+      FROM articles
+      WHERE article_id <> ${sourceArticleId}
+        AND is_published = TRUE
+        AND (
+          slug = ${cleanCandidate}
+          OR slug = ${slugified}
+          OR LOWER(title) = ${lowerCandidate}
+        )
+      ORDER BY CASE WHEN wiki_id = ${wikiId} THEN 0 ELSE 1 END
+      LIMIT 1;
+    `;
+
+    if (matches.length > 0) {
+      targetIds.add(matches[0].article_id);
+    }
+  }
+
+  for (const targetId of targetIds) {
+    await tx.$executeRaw`
+      INSERT INTO article_links (source_article_id, target_article_id)
+      VALUES (${sourceArticleId}, ${targetId})
+      ON CONFLICT DO NOTHING;
+    `;
+  }
+}
+
+// 1. GET ARTICLE PREVIEW CARD DATA BY SLUGS
+router.get('/preview/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
+  try {
+    const { wikiSlug, articleSlug } = req.params;
+
+    const articles = await prisma.$queryRaw`
+      SELECT 
+        a.article_id::INT AS article_id,
+        a.title,
+        a.slug,
+        COALESCE(a.description, '') AS description,
+        a.thumbnail_url,
+        a.read_count::INT AS read_count,
+        a.created_at,
+        w.title AS wiki_title,
+        w.slug AS wiki_slug,
+        c.name AS category_name
+      FROM articles a
+      INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+      LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
+      WHERE w.slug = ${wikiSlug} AND a.slug = ${articleSlug} AND a.is_published = TRUE
+      LIMIT 1;
+    `;
+
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article preview not found' });
+    }
+
+    res.status(200).json({ success: true, article: articles[0] });
+  } catch (error) {
+    console.error('Fetch article preview error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch article preview' });
+  }
+});
+
+// 2. DYNAMICALLY RESOLVE ARBITRARY LINK TO PREVIEW DATA
+router.get('/resolve-link', optionalAuth, async (req, res) => {
+  try {
+    const { target = '', currentWiki = '' } = req.query;
+    const cleanTarget = target.trim();
+
+    if (!cleanTarget) {
+      return res.status(400).json({ success: false, message: 'Target identifier is required' });
+    }
+
+    let wikiSlugPart = null;
+    let articleSlugPart = cleanTarget;
+    if (cleanTarget.includes('/')) {
+      const parts = cleanTarget.replace(/^\/+|\/+$/g, '').split('/');
+      if (parts.length >= 2) {
+        wikiSlugPart = parts[0];
+        articleSlugPart = parts[1];
+      }
+    }
+
+    const slugified = articleSlugPart.toLowerCase().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+    const lowerTarget = articleSlugPart.toLowerCase();
+
+    let articles;
+    if (wikiSlugPart) {
+      articles = await prisma.$queryRaw`
+        SELECT 
+          a.article_id::INT AS article_id,
+          a.title,
+          a.slug,
+          COALESCE(a.description, '') AS description,
+          a.thumbnail_url,
+          a.read_count::INT AS read_count,
+          w.title AS wiki_title,
+          w.slug AS wiki_slug,
+          c.name AS category_name
+        FROM articles a
+        INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+        LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
+        WHERE w.slug = ${wikiSlugPart}
+          AND a.is_published = TRUE
+          AND (a.slug = ${articleSlugPart} OR a.slug = ${slugified} OR LOWER(a.title) = ${lowerTarget})
+        LIMIT 1;
+      `;
+    } else {
+      articles = await prisma.$queryRaw`
+        SELECT 
+          a.article_id::INT AS article_id,
+          a.title,
+          a.slug,
+          COALESCE(a.description, '') AS description,
+          a.thumbnail_url,
+          a.read_count::INT AS read_count,
+          w.title AS wiki_title,
+          w.slug AS wiki_slug,
+          c.name AS category_name
+        FROM articles a
+        INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
+        LEFT JOIN categories c ON COALESCE(a.category_id, w.category_id) = c.category_id
+        WHERE a.is_published = TRUE
+          AND (a.slug = ${articleSlugPart} OR a.slug = ${slugified} OR LOWER(a.title) = ${lowerTarget})
+        ORDER BY CASE WHEN w.slug = ${currentWiki} THEN 0 ELSE 1 END, a.read_count DESC
+        LIMIT 1;
+      `;
+    }
+
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Referenced article not found' });
+    }
+
+    res.status(200).json({ success: true, article: articles[0] });
+  } catch (error) {
+    console.error('Resolve link error:', error);
+    res.status(500).json({ success: false, message: 'Failed to resolve link' });
+  }
+});
+
+// 3. CREATE ARTICLE (POST /api/articles)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { wiki_id, category_id, title, template_type = 'standard', content, edit_summary } = req.body;
@@ -128,6 +332,10 @@ router.post('/', authenticateToken, async (req, res) => {
         `;
       }
 
+      if (canPublishDirectly) {
+        await syncArticleLinks(tx, article.article_id, Number(wiki_id), content);
+      }
+
       return article;
     });
 
@@ -148,7 +356,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// FETCH FOR EDITING
+// 4. FETCH FOR EDITING
 router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -213,7 +421,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// COMMIT NEW VERSION
+// 5. COMMIT NEW VERSION
 router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -299,6 +507,9 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
             ON CONFLICT DO NOTHING;
           `;
         }
+
+        // Synchronize cross-article link network
+        await syncArticleLinks(tx, articleId, article.wiki_id, content);
       }
     });
 
@@ -317,7 +528,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   }
 });
 
-// TOGGLE ARTICLE LOCK STATE
+// 6. TOGGLE ARTICLE LOCK STATE (Wrapped in Explicit Transaction Control)
 router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -344,12 +555,14 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
       });
     }
 
-    const updated = await prisma.$queryRaw`
-      UPDATE articles
-      SET is_locked = NOT is_locked
-      WHERE article_id = ${articleId}
-      RETURNING is_locked;
-    `;
+    const updated = await prisma.$transaction(async (tx) => {
+      return await tx.$queryRaw`
+        UPDATE articles
+        SET is_locked = NOT is_locked
+        WHERE article_id = ${articleId}
+        RETURNING is_locked;
+      `;
+    });
 
     const newState = updated[0].is_locked;
     res.status(200).json({
@@ -363,7 +576,7 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   }
 });
 
-// DELETE ARTICLE
+// 7. DELETE ARTICLE
 router.delete('/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -391,6 +604,7 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
     }
 
     await prisma.$transaction([
+      prisma.$executeRaw`DELETE FROM article_links WHERE source_article_id = ${articleId} OR target_article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM article_media WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM reading_list_items WHERE article_id = ${articleId};`,
       prisma.$executeRaw`DELETE FROM reports WHERE article_id = ${articleId};`,
@@ -408,7 +622,7 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// GET ARTICLE BY SLUG
+// 8. GET ARTICLE BY SLUG
 router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   try {
     const { wikiSlug, articleSlug } = req.params;
@@ -485,7 +699,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   }
 });
 
-// GET PENDING REVISIONS FOR MANAGED WIKIS
+// 9. GET PENDING REVISIONS FOR MANAGED WIKIS
 router.get('/pending-reviews', authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.user_id);
@@ -548,7 +762,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// REVIEW VERSION
+// 10. REVIEW VERSION
 router.post('/versions/:versionId/review', authenticateToken, async (req, res) => {
   try {
     const versionId = Number(req.params.versionId);
@@ -618,6 +832,9 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
             ON CONFLICT DO NOTHING;
           `;
         }
+
+        // Link synchronization for approved community revisions
+        await syncArticleLinks(tx, ver.article_id, ver.wiki_id, ver.content);
       });
 
       return res.status(200).json({

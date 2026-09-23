@@ -1,33 +1,119 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import WikiHoverCard from '../components/WikiHoverCard';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+
+function parseArticleContent(text, currentWikiSlug) {
+  if (!text || typeof text !== 'string') return text;
+
+  // Match both [[Wiki Link]] and [Markdown Link](url)
+  const tokenRegex = /(\[\[[^\]]+\]\]|\[[^\]]+\]\([^)]+\))/g;
+  const parts = text.split(tokenRegex);
+
+  return parts.map((part, index) => {
+    if (!part) return null;
+
+    // 1. Double Bracket Wiki Syntax: [[Title]] or [[Target|Display Label]]
+    if (part.startsWith('[[') && part.endsWith(']]')) {
+      const inner = part.slice(2, -2).trim();
+      let target = inner;
+      let label = inner;
+
+      if (inner.includes('|')) {
+        const split = inner.split('|');
+        target = split[0].trim();
+        label = split[1].trim();
+      }
+
+      return (
+        <WikiHoverCard
+          key={`wl-${index}`}
+          target={target}
+          currentWiki={currentWikiSlug}
+        >
+          {label}
+        </WikiHoverCard>
+      );
+    }
+
+    // 2. Standard Markdown Link Syntax: [Label](url)
+    const mdMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (mdMatch) {
+      const label = mdMatch[1];
+      const href = mdMatch[2].trim();
+
+      const wikiPathMatch = href.match(/\/wiki\/([^\/\s#?]+)\/([^\/\s#?]+)/);
+      if (wikiPathMatch) {
+        const targetWiki = wikiPathMatch[1];
+        const targetSlug = wikiPathMatch[2];
+
+        return (
+          <WikiHoverCard
+            key={`md-${index}`}
+            target={`${targetWiki}/${targetSlug}`}
+            currentWiki={currentWikiSlug}
+            fallbackHref={href}
+          >
+            {label}
+          </WikiHoverCard>
+        );
+      }
+
+      // External or standard web link
+      if (href.startsWith('http') || href.startsWith('//')) {
+        return (
+          <a
+            key={`ext-${index}`}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#38bdf8', textDecoration: 'underline', textUnderlineOffset: '3px' }}
+          >
+            {label} ↗
+          </a>
+        );
+      }
+
+      // Relative path or local slug
+      const localTarget = href.replace(/^\/+/, '').split(/[?#]/)[0];
+      return (
+        <WikiHoverCard
+          key={`loc-${index}`}
+          target={localTarget}
+          currentWiki={currentWikiSlug}
+          fallbackHref={href}
+        >
+          {label}
+        </WikiHoverCard>
+      );
+    }
+
+    return part;
+  });
+}
 
 export default function ArticlePage() {
   const { wikiSlug, articleSlug } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // 1. Data states
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // 2. Report modal states
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [reportStatus, setReportStatus] = useState({ text: '', type: '' });
 
-  // 3. Bookmark / Reading list states
   const [isBookmarkOpen, setIsBookmarkOpen] = useState(false);
   const [readingLists, setReadingLists] = useState([]);
   const [newListTitle, setNewListTitle] = useState('');
   const [creatingList, setCreatingList] = useState(false);
 
-  // 4. Management & Deletion states (Authors, Co-Authors, Admins)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [lockStatusMsg, setLockStatusMsg] = useState('');
@@ -160,7 +246,7 @@ export default function ArticlePage() {
               Delete Article Permanently?
             </h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
-              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, moderation reports, and bookmarked list entries. This action cannot be undone.
+              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, and bookmarked list entries.
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -267,7 +353,7 @@ export default function ArticlePage() {
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>
 
-            {/* ACTION & MODERATION CONTROLS */}
+            {/* ACTION CONTROLS */}
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               {canManageArticle && (
                 <>
@@ -491,7 +577,7 @@ export default function ArticlePage() {
               if (block.type === 'header') {
                 return (
                   <h2 key={key} style={{ fontSize: '1.55rem', fontWeight: 600, marginTop: '1rem', color: '#fff' }}>
-                    {block.data?.text || block.text}
+                    {parseArticleContent(block.data?.text || block.text, article.wiki_slug || wikiSlug)}
                   </h2>
                 );
               }
@@ -518,17 +604,17 @@ export default function ArticlePage() {
                     />
                     {block.data?.caption && (
                       <figcaption style={{ fontSize: '0.825rem', color: '#a1a1aa', marginTop: '0.5rem', fontStyle: 'italic' }}>
-                        {block.data.caption}
+                        {parseArticleContent(block.data.caption, article.wiki_slug || wikiSlug)}
                       </figcaption>
                     )}
                   </figure>
                 );
               }
 
-              // 3. Paragraph block (default)
+              // 3. Paragraph block with Wiki link & Hover Card resolution
               return (
                 <p key={key} style={{ fontSize: '1.05rem', color: '#d4d4d8', margin: 0 }}>
-                  {block.data?.text || block.text}
+                  {parseArticleContent(block.data?.text || block.text, article.wiki_slug || wikiSlug)}
                 </p>
               );
             })

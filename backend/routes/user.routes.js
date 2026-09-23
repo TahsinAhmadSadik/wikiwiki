@@ -2,6 +2,7 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js'; //transaction control
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -67,12 +68,19 @@ router.patch('/profile', authenticateToken, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Bio cannot exceed 500 characters' });
     }
 
-    const updated = await prisma.$queryRaw`
+  const updated = await withTransaction(async (client) => {
+  const result = await client.query(
+    `
       UPDATE users
-      SET bio = ${bio ?? null}
-      WHERE user_id = ${userId}
-      RETURNING user_id::INT AS user_id, username, email, bio, global_role;
-    `;
+      SET bio = $1
+      WHERE user_id = $2
+      RETURNING user_id::INT AS user_id, username, email, bio, global_role
+    `,
+    [bio ?? null, userId]
+  );
+
+  return result.rows;
+});
 
     res.status(200).json({
       success: true,
@@ -116,13 +124,17 @@ router.post('/change-password', authenticateToken, async (req, res) => {
     const newHash = await bcrypt.hash(new_password, 12);
     const nextTokenVersion = user.token_version + 1;
 
-    await prisma.$executeRaw`
+await withTransaction(async (client) => {
+  await client.query(
+    `
       UPDATE users
-      SET password_hash = ${newHash},
-          token_version = ${nextTokenVersion}
-      WHERE user_id = ${userId};
-    `;
-
+      SET password_hash = $1,
+          token_version = $2
+      WHERE user_id = $3
+    `,
+    [newHash, nextTokenVersion, userId]
+  );
+});
     const newToken = jwt.sign(
       { user_id: userId, token_version: nextTokenVersion },
       process.env.JWT_SECRET,
@@ -143,10 +155,16 @@ router.post('/change-password', authenticateToken, async (req, res) => {
 // 4. UNFOLLOW CATEGORY OR WIKI
 router.delete('/follows/category/:categoryId', authenticateToken, async (req, res) => {
   try {
-    await prisma.$executeRaw`
+await withTransaction(async (client) => {
+  await client.query(
+    `
       DELETE FROM user_category_follows
-      WHERE user_id = ${req.user.user_id} AND category_id = ${Number(req.params.categoryId)};
-    `;
+      WHERE user_id = $1
+        AND category_id = $2
+    `,
+    [req.user.user_id, Number(req.params.categoryId)]
+  );
+});
     res.status(200).json({ success: true, message: 'Category removed' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to remove category follow' });
@@ -155,10 +173,16 @@ router.delete('/follows/category/:categoryId', authenticateToken, async (req, re
 
 router.delete('/follows/wiki/:wikiId', authenticateToken, async (req, res) => {
   try {
-    await prisma.$executeRaw`
+ await withTransaction(async (client) => {
+  await client.query(
+    `
       DELETE FROM user_wiki_follows
-      WHERE user_id = ${req.user.user_id} AND wiki_id = ${Number(req.params.wikiId)};
-    `;
+      WHERE user_id = $1
+        AND wiki_id = $2
+    `,
+    [req.user.user_id, Number(req.params.wikiId)]
+  );
+});
     res.status(200).json({ success: true, message: 'Wiki removed' });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to remove wiki follow' });
@@ -199,12 +223,39 @@ router.delete('/account', authenticateToken, async (req, res) => {
     }
 
     // Clean up follows and resets before deleting the user record
-    await prisma.$transaction([
-      prisma.$executeRaw`DELETE FROM user_category_follows WHERE user_id = ${userId};`,
-      prisma.$executeRaw`DELETE FROM user_wiki_follows WHERE user_id = ${userId};`,
-      prisma.$executeRaw`DELETE FROM password_resets WHERE user_id = ${userId};`,
-      prisma.$executeRaw`DELETE FROM users WHERE user_id = ${userId};`
-    ]);
+  await withTransaction(async (client) => {
+  await client.query(
+    `
+      DELETE FROM user_category_follows
+      WHERE user_id = $1
+    `,
+    [userId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM user_wiki_follows
+      WHERE user_id = $1
+    `,
+    [userId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM password_resets
+      WHERE user_id = $1
+    `,
+    [userId]
+  );
+
+  await client.query(
+    `
+      DELETE FROM users
+      WHERE user_id = $1
+    `,
+    [userId]
+  );
+});
 
     res.status(200).json({
       success: true,

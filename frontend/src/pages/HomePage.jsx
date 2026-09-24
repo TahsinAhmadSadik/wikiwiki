@@ -469,86 +469,86 @@ export default function HomePage() {
               );
 
               return (
-                <div
-                  key={wiki.wiki_id}
-                  className="wiki-card-hover"
-                  style={{
-                    backgroundColor: '#121215',
-                    border: '1px solid #222227',
-                    borderRadius: 12,
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between'
-                  }}
-                >
-                  <div>
-                    {/* Wiki Cover */}
-                    <div style={{
-                      height: 120,
-                      width: '100%',
-                      backgroundColor: '#18181b',
-                      backgroundImage: wiki.cover_image_url ? `url(${wiki.cover_image_url})` : 'none',
-                      backgroundSize: 'cover',
-                      backgroundPosition: 'center',
-                      position: 'relative'
-                    }}>
+                <Link to={`/wiki/${wiki.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                  <div
+                    key={wiki.wiki_id}
+                    className="wiki-card-hover"
+                    style={{
+                      backgroundColor: '#121215',
+                      border: '1px solid #222227',
+                      borderRadius: 12,
+                      overflow: 'hidden',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                      height: '100%'
+                    }}
+                  >
+                    <div>
+                      {/* Wiki Cover */}
                       <div style={{
-                        position: 'absolute',
-                        inset: 0,
-                        background: 'linear-gradient(180deg, rgba(0,0,0,0.1) 0%, rgba(18,18,21,0.95) 100%)'
-                      }} />
-                      <span style={{
-                        position: 'absolute',
-                        top: '0.75rem',
-                        right: '0.75rem',
-                        backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                        border: '1px solid rgba(16, 185, 129, 0.3)',
-                        color: '#34d399',
-                        fontSize: '0.72rem',
-                        fontWeight: 700,
-                        padding: '0.2rem 0.55rem',
-                        borderRadius: 6
+                        height: 120,
+                        width: '100%',
+                        backgroundColor: '#18181b',
+                        backgroundImage: wiki.cover_image_url ? `url(${wiki.cover_image_url})` : 'none',
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                        position: 'relative'
                       }}>
-                        ⚡ {trendingRating}/100
-                      </span>
+                        <div style={{
+                          position: 'absolute',
+                          inset: 0,
+                          background: 'linear-gradient(180deg, rgba(0,0,0,0.1) 0%, rgba(18,18,21,0.95) 100%)'
+                        }} />
+                      </div>
+
+                      <div style={{ padding: '1rem 1.25rem 0.5rem 1.25rem' }}>
+                        <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', fontWeight: 600 }}>
+                            {wiki.title}
+                        </h3>
+                        <p style={{
+                          color: '#71717a',
+                          fontSize: '0.825rem',
+                          margin: 0,
+                          lineHeight: 1.45,
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical',
+                          overflow: 'hidden'
+                        }}>
+                          {wiki.description || 'No description available for this wiki space.'}
+                        </p>
+                      </div>
                     </div>
 
-                    <div style={{ padding: '1rem 1.25rem 0.5rem 1.25rem' }}>
-                      <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', fontWeight: 600 }}>
-                        <Link to={`/wiki/${wiki.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
-                          {wiki.title}
-                        </Link>
-                      </h3>
-                      <p style={{
-                        color: '#71717a',
-                        fontSize: '0.825rem',
-                        margin: 0,
-                        lineHeight: 1.45,
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden'
-                      }}>
-                        {wiki.description || 'Curated programming compendium.'}
-                      </p>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontSize: '0.75rem',
+                      color: '#a1a1aa',
+                      borderTop: '1px solid #1c1c21',
+                      padding: '0.85rem 1.25rem',
+                      marginTop: '1rem',
+                      backgroundColor: '#0e0e11'
+                    }}>
+                      <span>📚 {wiki.total_articles} Articles</span>
+                      <span>👁️ {Number(wiki.total_views).toLocaleString()} Views</span>
+                      
+                        <span style={{
+                          backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                          border: '1px solid rgba(16, 185, 129, 0.3)',
+                          color: '#34d399',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          padding: '0.2rem 0.55rem',
+                          borderRadius: 6
+                        }}>
+                          ⚡ {trendingRating}
+                        </span>
                     </div>
                   </div>
-
-                  <div style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    fontSize: '0.75rem',
-                    color: '#a1a1aa',
-                    borderTop: '1px solid #1c1c21',
-                    padding: '0.85rem 1.25rem',
-                    marginTop: '1rem',
-                    backgroundColor: '#0e0e11'
-                  }}>
-                    <span>📚 {wiki.total_articles} Articles</span>
-                    <span>👁️ {Number(wiki.total_views).toLocaleString()} Views</span>
-                  </div>
-                </div>
+                </Link>
               );
             })}
           </div>

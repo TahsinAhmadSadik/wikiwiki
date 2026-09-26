@@ -23,13 +23,12 @@ import mediaRoutes from './routes/media.routes.js';
 dotenv.config();
 const app = express();
 
-// Strip trailing slash if present in environment variable
-const frontendUrl = process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.replace(/\/+$/, '')
-  : null;
+const rawFrontendUrl = process.env.FRONTEND_URL || '';
+const cleanFrontendUrl = rawFrontendUrl.replace(/\/+$/, ''); // Strip any trailing slash
 
 const allowedOrigins = [
-  frontendUrl,
+  'https://wikiwiki-app.netlify.app',
+  cleanFrontendUrl,
   'http://localhost:5173',
   'http://localhost:3000'
 ].filter(Boolean);
@@ -37,14 +36,24 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g., server-to-server, mobile, curl) or matched origins
-      if (!origin || allowedOrigins.includes(origin)) {
+      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Check if origin matches allowed list or any netlify preview deploy
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.netlify.app');
+
+      if (isAllowed) {
         callback(null, true);
       } else {
+        console.warn(`[CORS Blocked]: ${origin}`);
         callback(new Error(`CORS blocked for origin: ${origin}`));
       }
     },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   })
 );
 

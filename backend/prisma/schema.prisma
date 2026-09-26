@@ -8,9 +8,252 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
-/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
-model test {
-  id         BigInt   @id @default(autoincrement())
-  created_at DateTime @default(now()) @db.Timestamptz(6)
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model article_links {
+  source_article_id                                  Int
+  target_article_id                                  Int
+  articles_article_links_source_article_idToarticles articles @relation("article_links_source_article_idToarticles", fields: [source_article_id], references: [article_id], onDelete: Cascade, onUpdate: NoAction)
+  articles_article_links_target_article_idToarticles articles @relation("article_links_target_article_idToarticles", fields: [target_article_id], references: [article_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([source_article_id, target_article_id])
+}
+
+model article_media {
+  article_id Int
+  media_id   Int
+  articles   articles @relation(fields: [article_id], references: [article_id], onDelete: Cascade, onUpdate: NoAction)
+  media      media    @relation(fields: [media_id], references: [media_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([article_id, media_id])
+}
+
+model article_versions {
+  version_id                                Int                      @id @default(autoincrement())
+  article_id                                Int
+  editor_id                                 Int?
+  approver_id                               Int?
+  version_number                            Int
+  content                                   Json?                    @default("{}")
+  search_vector                             Unsupported("tsvector")?
+  edit_summary                              String?                  @db.VarChar(255)
+  approval_feedback                         String?                  @db.VarChar(255)
+  is_published                              Boolean                  @default(false)
+  created_at                                DateTime                 @default(now()) @db.Timestamptz(6)
+  users_article_versions_approver_idTousers users?                   @relation("article_versions_approver_idTousers", fields: [approver_id], references: [user_id], onUpdate: NoAction)
+  articles                                  articles                 @relation(fields: [article_id], references: [article_id], onDelete: Cascade, onUpdate: NoAction)
+  users_article_versions_editor_idTousers   users?                   @relation("article_versions_editor_idTousers", fields: [editor_id], references: [user_id], onUpdate: NoAction)
+  reports                                   reports[]
+
+  @@unique([article_id, version_number])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model articles {
+  article_id                                              Int                  @id @default(autoincrement())
+  wiki_id                                                 Int
+  category_id                                             Int?
+  title                                                   String               @db.VarChar(200)
+  slug                                                    String               @db.VarChar(200)
+  is_locked                                               Boolean              @default(false)
+  is_published                                            Boolean              @default(false)
+  template_type                                           String?              @default("standard") @db.VarChar(50)
+  read_count                                              BigInt?              @default(0)
+  created_at                                              DateTime             @default(now()) @db.Timestamptz(6)
+  article_links_article_links_source_article_idToarticles article_links[]      @relation("article_links_source_article_idToarticles")
+  article_links_article_links_target_article_idToarticles article_links[]      @relation("article_links_target_article_idToarticles")
+  article_media                                           article_media[]
+  article_versions                                        article_versions[]
+  categories                                              categories?          @relation(fields: [category_id], references: [category_id], onUpdate: NoAction)
+  wiki_spaces                                             wiki_spaces          @relation(fields: [wiki_id], references: [wiki_id], onDelete: Cascade, onUpdate: NoAction)
+  reading_list_items                                      reading_list_items[]
+  reports                                                 reports[]
+
+  @@unique([wiki_id, slug])
+}
+
+model categories {
+  category_id           Int                     @id @default(autoincrement())
+  name                  String                  @unique @db.VarChar(100)
+  description           String?
+  parent_category_id    Int?
+  created_at            DateTime                @default(now()) @db.Timestamptz(6)
+  articles              articles[]
+  categories            categories?             @relation("categoriesTocategories", fields: [parent_category_id], references: [category_id], onUpdate: NoAction)
+  other_categories      categories[]            @relation("categoriesTocategories")
+  user_category_follows user_category_follows[]
+  wiki_spaces           wiki_spaces[]
+}
+
+model media {
+  media_id      Int             @id @default(autoincrement())
+  media_type    media_type_enum
+  file_url      String
+  uploader_id   Int?
+  created_at    DateTime        @default(now()) @db.Timestamptz(6)
+  article_media article_media[]
+  users         users?          @relation(fields: [uploader_id], references: [user_id], onUpdate: NoAction)
+  media_audio   media_audio?
+  media_images  media_images?
+  media_videos  media_videos?
+  wiki_spaces   wiki_spaces[]
+}
+
+model media_audio {
+  media_id         Int     @id
+  duration_seconds Int?
+  bitrate          Int?
+  audio_codec      String? @db.VarChar(50)
+  media            media   @relation(fields: [media_id], references: [media_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model media_images {
+  media_id Int     @id
+  width    Int?
+  height   Int?
+  alt_text String? @db.VarChar(255)
+  media    media   @relation(fields: [media_id], references: [media_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model media_videos {
+  media_id         Int     @id
+  duration_seconds Int?
+  resolution       String? @db.VarChar(20)
+  fps              Int?
+  media            media   @relation(fields: [media_id], references: [media_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model reading_list_items {
+  list_id       Int
+  article_id    Int
+  added_at      DateTime      @default(now()) @db.Timestamptz(6)
+  articles      articles      @relation(fields: [article_id], references: [article_id], onDelete: Cascade, onUpdate: NoAction)
+  reading_lists reading_lists @relation(fields: [list_id], references: [list_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([list_id, article_id])
+}
+
+model reading_lists {
+  list_id            Int                  @id @default(autoincrement())
+  user_id            Int
+  title              String               @db.VarChar(100)
+  is_public          Boolean              @default(true)
+  created_at         DateTime             @default(now()) @db.Timestamptz(6)
+  reading_list_items reading_list_items[]
+  users              users                @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model reports {
+  report_id                        Int                @id @default(autoincrement())
+  article_id                       Int
+  version_id                       Int?
+  reporter_id                      Int?
+  resolver_id                      Int?
+  reason                           String
+  status                           report_status_enum @default(pending)
+  created_at                       DateTime           @default(now()) @db.Timestamptz(6)
+  resolved_at                      DateTime?          @db.Timestamptz(6)
+  articles                         articles           @relation(fields: [article_id], references: [article_id], onDelete: Cascade, onUpdate: NoAction)
+  users_reports_reporter_idTousers users?             @relation("reports_reporter_idTousers", fields: [reporter_id], references: [user_id], onUpdate: NoAction)
+  users_reports_resolver_idTousers users?             @relation("reports_resolver_idTousers", fields: [resolver_id], references: [user_id], onUpdate: NoAction)
+  article_versions                 article_versions?  @relation(fields: [version_id], references: [version_id], onUpdate: NoAction)
+}
+
+model user_category_follows {
+  user_id     Int
+  category_id Int
+  followed_at DateTime   @default(now()) @db.Timestamptz(6)
+  categories  categories @relation(fields: [category_id], references: [category_id], onDelete: Cascade, onUpdate: NoAction)
+  users       users      @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, category_id])
+}
+
+model user_wiki_follows {
+  user_id     Int
+  wiki_id     Int
+  followed_at DateTime    @default(now()) @db.Timestamptz(6)
+  users       users       @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  wiki_spaces wiki_spaces @relation(fields: [wiki_id], references: [wiki_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, wiki_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model users {
+  user_id                                              Int                     @id @default(autoincrement())
+  username                                             String                  @unique @db.VarChar(50)
+  email                                                String                  @unique @db.VarChar(100)
+  password_hash                                        String                  @db.VarChar(255)
+  global_role                                          global_role_enum        @default(contributor)
+  is_banned                                            Boolean                 @default(false)
+  demerit_points                                       Int?                    @default(0)
+  profile_pic_url                                      String?
+  bio                                                  String?
+  theme_preference                                     String?                 @default("default") @db.VarChar(30)
+  created_at                                           DateTime                @default(now()) @db.Timestamptz(6)
+  article_versions_article_versions_approver_idTousers article_versions[]      @relation("article_versions_approver_idTousers")
+  article_versions_article_versions_editor_idTousers   article_versions[]      @relation("article_versions_editor_idTousers")
+  media                                                media[]
+  reading_lists                                        reading_lists[]
+  reports_reports_reporter_idTousers                   reports[]               @relation("reports_reporter_idTousers")
+  reports_reports_resolver_idTousers                   reports[]               @relation("reports_resolver_idTousers")
+  user_category_follows                                user_category_follows[]
+  user_wiki_follows                                    user_wiki_follows[]
+  wiki_memberships                                     wiki_memberships[]
+  wiki_spaces                                          wiki_spaces[]
+}
+
+model wiki_memberships {
+  user_id     Int
+  wiki_id     Int
+  role        wiki_role_enum
+  assigned_at DateTime       @default(now()) @db.Timestamptz(6)
+  users       users          @relation(fields: [user_id], references: [user_id], onDelete: Cascade, onUpdate: NoAction)
+  wiki_spaces wiki_spaces    @relation(fields: [wiki_id], references: [wiki_id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([user_id, wiki_id])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model wiki_spaces {
+  wiki_id           Int                 @id @default(autoincrement())
+  title             String              @db.VarChar(150)
+  slug              String              @unique @db.VarChar(150)
+  description       String?
+  media_id          Int?
+  template_config   Json?               @default("{}")
+  creator_id        Int?
+  category_id       Int?
+  total_views       BigInt?             @default(0)
+  created_at        DateTime            @default(now()) @db.Timestamptz(6)
+  articles          articles[]
+  user_wiki_follows user_wiki_follows[]
+  wiki_memberships  wiki_memberships[]
+  categories        categories?         @relation(fields: [category_id], references: [category_id], onDelete: Restrict, onUpdate: NoAction)
+  users             users?              @relation(fields: [creator_id], references: [user_id], onUpdate: NoAction)
+  media             media?              @relation(fields: [media_id], references: [media_id], onUpdate: NoAction)
+}
+
+enum global_role_enum {
+  guest
+  contributor
+  admin
+  owner
+}
+
+enum media_type_enum {
+  image
+  audio
+  video
+}
+
+enum report_status_enum {
+  pending
+  resolved
+  dismissed
+}
+
+enum wiki_role_enum {
+  author
+  co_author
 }

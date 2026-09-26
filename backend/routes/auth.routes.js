@@ -6,7 +6,7 @@ import jwt from 'jsonwebtoken';
 import { Resend } from 'resend';
 import { prisma } from '../lib/prisma.js';
 import { executeTransaction } from '../lib/db.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -79,7 +79,7 @@ router.post('/register', authLimiter, async (req, res) => {
   }
 });
 
-// 2. VERIFY EMAIL (Explicit Transaction: INSERT user + DELETE pending)
+// 2. VERIFY EMAIL (Explicitly sets has_onboarded = FALSE)
 router.post('/verify-email', authLimiter, async (req, res) => {
   try {
     const { token } = req.body;
@@ -113,8 +113,8 @@ router.post('/verify-email', authLimiter, async (req, res) => {
     // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       await client.query(
-        `INSERT INTO users (username, email, password_hash, global_role)
-         VALUES ($1, $2, $3, 'contributor');`,
+        `INSERT INTO users (username, email, password_hash, global_role, has_onboarded)
+         VALUES ($1, $2, $3, 'contributor', FALSE);`,
         [pending.username, pending.email, pending.password_hash]
       );
 
@@ -134,7 +134,7 @@ router.post('/verify-email', authLimiter, async (req, res) => {
   }
 });
 
-// 3. LOGIN
+// 3. LOGIN (Guarantees boolean has_onboarded state)
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -143,7 +143,15 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     const users = await prisma.$queryRaw`
-      SELECT user_id, username, email, password_hash, global_role, is_banned, token_version, has_onboarded
+      SELECT 
+        user_id::INT AS user_id, 
+        username, 
+        email, 
+        password_hash, 
+        global_role, 
+        is_banned, 
+        token_version, 
+        COALESCE(has_onboarded, FALSE) AS has_onboarded
       FROM users WHERE email = ${email} LIMIT 1;
     `;
 
@@ -170,7 +178,7 @@ router.post('/login', authLimiter, async (req, res) => {
         username: user.username,
         email: user.email,
         global_role: user.global_role,
-        has_onboarded: user.has_onboarded
+        has_onboarded: Boolean(user.has_onboarded)
       }
     });
   } catch (error) {
@@ -246,7 +254,7 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
   }
 });
 
-// 6. RESET PASSWORD (Explicit Transaction: UPDATE password + UPDATE reset token)
+// 6. RESET PASSWORD
 router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const { token, password } = req.body;
@@ -270,7 +278,6 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 
     const newPasswordHash = await bcrypt.hash(password, 12);
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       await client.query(
         `UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE user_id = $2;`,
@@ -292,13 +299,27 @@ router.post('/reset-password', authLimiter, async (req, res) => {
   }
 });
 
-// 7. GET ONBOARDING DATA
-router.get('/onboarding-data', authenticateToken, async (req, res) => {
+// 7. GET ONBOARDING DATA (Permissive Auth & Clean Int Casting)
+router.get('/onboarding-data', optionalAuth, async (req, res) => {
   try {
-    const categories = await prisma.$queryRaw`SELECT category_id, name, description FROM categories ORDER BY name ASC;`;
-    const wikis = await prisma.$queryRaw`
-      SELECT wiki_id, title, slug, description, total_views::INT AS total_views FROM wiki_spaces ORDER BY total_views DESC LIMIT 12;
+    const categories = await prisma.$queryRaw`
+      SELECT category_id::INT AS category_id, name, description 
+      FROM categories 
+      ORDER BY name ASC;
     `;
+
+    const wikis = await prisma.$queryRaw`
+      SELECT 
+        wiki_id::INT AS wiki_id, 
+        title, 
+        slug, 
+        description, 
+        total_views::INT AS total_views 
+      FROM wiki_spaces 
+      ORDER BY total_views DESC 
+      LIMIT 12;
+    `;
+
     res.status(200).json({ success: true, categories, wikis });
   } catch (error) {
     console.error('Failed to fetch onboarding data:', error);
@@ -306,13 +327,12 @@ router.get('/onboarding-data', authenticateToken, async (req, res) => {
   }
 });
 
-// 8. ONBOARDING (Explicit Transaction: Batch Inserts + User Update)
+// 8. ONBOARDING SUBMISSION
 router.post('/onboarding', authenticateToken, async (req, res) => {
   try {
     const { category_ids = [], wiki_ids = [] } = req.body;
     const userId = Number(req.user.user_id);
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       for (const catId of category_ids) {
         await client.query(
@@ -338,7 +358,11 @@ router.post('/onboarding', authenticateToken, async (req, res) => {
       );
     });
 
-    res.status(200).json({ success: true, message: 'Interests saved successfully' });
+    res.status(200).json({ 
+      success: true, 
+      has_onboarded: true, 
+      message: 'Interests saved successfully' 
+    });
   } catch (error) {
     console.error('Onboarding error:', error);
     res.status(500).json({ success: false, message: 'Failed to record selected interests' });

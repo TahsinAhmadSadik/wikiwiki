@@ -82,7 +82,6 @@ export default function SettingsPage() {
     return clean.endsWith('/api') ? `${clean}/media/upload` : `${clean}/api/media/upload`;
   };
 
-  // Upload Profile Avatar using the same media upload pipeline
   const handleAvatarFileUpload = async (file) => {
     if (!file) return;
     setUploadingPic(true);
@@ -109,8 +108,6 @@ export default function SettingsPage() {
       }
 
       setProfilePicUrl(data.url);
-
-      // Auto-save the new profile picture URL to the user account
       const patchRes = await api.patch('/users/profile', { profile_pic_url: data.url });
       updateUser(patchRes.user);
       setMessage({ text: 'Profile picture updated successfully!', type: 'success' });
@@ -121,7 +118,6 @@ export default function SettingsPage() {
     }
   };
 
-  // Reset to DiceBear default
   const handleResetAvatar = async () => {
     setSaving(true);
     setMessage({ text: '', type: '' });
@@ -204,7 +200,7 @@ export default function SettingsPage() {
     e.preventDefault();
     setDeleteError('');
 
-    if (deleteConfirmationEmail.trim().toLowerCase() !== user?.email.toLowerCase()) {
+    if (deleteConfirmationEmail.trim().toLowerCase() !== user?.email?.toLowerCase()) {
       setDeleteError('Entered email does not match your account email.');
       return;
     }
@@ -214,11 +210,12 @@ export default function SettingsPage() {
     try {
       await api.delete('/users/account', {
         confirm_email: deleteConfirmationEmail.trim(),
+        body: { confirm_email: deleteConfirmationEmail.trim() }
       });
       await logout();
       navigate('/register');
     } catch (err) {
-      setDeleteError(err.data?.message || err.message);
+      setDeleteError(err.data?.message || err.message || 'Failed to delete account.');
       setDeleting(false);
     }
   };
@@ -623,7 +620,7 @@ export default function SettingsPage() {
                   className="danger-btn"
                   disabled={
                     deleting ||
-                    deleteConfirmationEmail.trim().toLowerCase() !== user?.email.toLowerCase()
+                    deleteConfirmationEmail.trim().toLowerCase() !== user?.email?.toLowerCase()
                   }
                 >
                   {deleting ? 'Deleting...' : 'Delete Permanently'}

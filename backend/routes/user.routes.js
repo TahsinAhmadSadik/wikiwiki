@@ -7,7 +7,7 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// 1. GET CURRENT USER PROFILE & PREFERENCES (Includes profile_pic_url)
+// 1. GET CURRENT USER PROFILE & PREFERENCES
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const users = await prisma.$queryRaw`
@@ -20,7 +20,7 @@ router.get('/me', authenticateToken, async (req, res) => {
         global_role,
         COALESCE(demerit_points, 0)::INT AS demerit_points,
         is_banned,
-        has_onboarded,
+        COALESCE(has_onboarded, FALSE) AS has_onboarded,
         created_at
       FROM users
       WHERE user_id = ${req.user.user_id}
@@ -59,7 +59,7 @@ router.get('/me', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. UPDATE PROFILE (Bio and Profile Picture URL)
+// 2. UPDATE PROFILE
 router.patch('/profile', authenticateToken, async (req, res) => {
   try {
     const { bio, profile_pic_url } = req.body;
@@ -84,7 +84,7 @@ router.patch('/profile', authenticateToken, async (req, res) => {
       SET bio = ${targetBio},
           profile_pic_url = ${targetPic}
       WHERE user_id = ${userId}
-      RETURNING user_id::INT AS user_id, username, email, bio, profile_pic_url, global_role;
+      RETURNING user_id::INT AS user_id, username, email, bio, profile_pic_url, global_role, COALESCE(has_onboarded, FALSE) AS has_onboarded;
     `;
 
     res.status(200).json({
@@ -165,31 +165,55 @@ router.delete('/follows/wiki/:wikiId', authenticateToken, async (req, res) => {
   }
 });
 
-// 5. DELETE ACCOUNT
+// 5. DELETE ACCOUNT (Atomic Cascading Deletion Across All Foreign Key Dependencies)
 router.delete('/account', authenticateToken, async (req, res) => {
   try {
-    const { confirm_email } = req.body;
+    const rawEmail = req.body?.confirm_email || req.body?.body?.confirm_email || req.query?.confirm_email;
     const userId = Number(req.user.user_id);
 
-    if (!confirm_email) {
+    if (!rawEmail || !rawEmail.trim()) {
       return res.status(400).json({ success: false, message: 'Email confirmation is required' });
     }
 
     const users = await prisma.$queryRaw`
-      SELECT user_id, email FROM users WHERE user_id = ${userId} LIMIT 1;
+      SELECT user_id::INT AS user_id, email FROM users WHERE user_id = ${userId} LIMIT 1;
     `;
 
     if (users.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
     const user = users[0];
 
-    if (user.email.toLowerCase() !== confirm_email.trim().toLowerCase()) {
+    if (user.email.toLowerCase() !== rawEmail.trim().toLowerCase()) {
       return res.status(400).json({ success: false, message: 'Provided email does not match your account email' });
     }
 
+    // Explicit BEGIN -> COMMIT / ROLLBACK transaction executing cascading cleanups
     await executeTransaction(async (client) => {
+      // 1. Clean up Reading Lists and nested items
+      await client.query(`
+        DELETE FROM reading_list_items 
+        WHERE list_id IN (SELECT list_id FROM reading_lists WHERE user_id = $1);
+      `, [userId]);
+      await client.query(`DELETE FROM reading_lists WHERE user_id = $1;`, [userId]);
+
+      // 2. Clean up memberships and followings
+      await client.query(`DELETE FROM wiki_memberships WHERE user_id = $1;`, [userId]);
       await client.query(`DELETE FROM user_category_follows WHERE user_id = $1;`, [userId]);
       await client.query(`DELETE FROM user_wiki_follows WHERE user_id = $1;`, [userId]);
+
+      // 3. Nullify audit & authoring references to avoid foreign key violations
+      await client.query(`UPDATE media SET uploader_id = NULL WHERE uploader_id = $1;`, [userId]);
+      await client.query(`UPDATE wiki_spaces SET creator_id = NULL WHERE creator_id = $1;`, [userId]);
+      await client.query(`UPDATE article_versions SET editor_id = NULL WHERE editor_id = $1;`, [userId]);
+      await client.query(`UPDATE article_versions SET approver_id = NULL WHERE approver_id = $1;`, [userId]);
+      await client.query(`UPDATE reports SET reporter_id = NULL WHERE reporter_id = $1;`, [userId]);
+      await client.query(`UPDATE reports SET resolver_id = NULL WHERE resolver_id = $1;`, [userId]);
+      await client.query(`UPDATE article_rollback_logs SET user_id = NULL WHERE user_id = $1;`, [userId]);
+
+      // 4. Delete resets and registration attempts
       await client.query(`DELETE FROM password_resets WHERE user_id = $1;`, [userId]);
+      await client.query(`DELETE FROM pending_registrations WHERE email = $1;`, [user.email]);
+
+      // 5. Finally delete the user account
       await client.query(`DELETE FROM users WHERE user_id = $1;`, [userId]);
     });
 

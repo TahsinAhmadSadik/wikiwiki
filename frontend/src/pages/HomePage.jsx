@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import OnboardingModal from '../components/OnboardingModal';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import '../styles/auth.css';
@@ -26,7 +27,7 @@ const PIE_COLORS = [
 ];
 
 export default function HomePage() {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const navigate = useNavigate();
 
   // Search State
@@ -67,7 +68,6 @@ export default function HomePage() {
           }
         ];
 
-  // Calculate highest velocity score to normalize ratings strictly between 0 and 100
   const maxVelocity = Math.max(
     ...velocityWikis.map((w) => Number(w.velocity_score) || 0),
     100
@@ -77,7 +77,6 @@ export default function HomePage() {
     const fetchLandingData = async () => {
       setErrorMsg('');
 
-      // 1. Fetch Global Public Feeds & Analytics
       try {
         const [catRes, velRes, topRes, distributionRes] = await Promise.all([
           api.get('/categories'),
@@ -97,7 +96,7 @@ export default function HomePage() {
         setErrorMsg(err.data?.message || err.message || 'Failed to load explore feed.');
       }
 
-      // 2. Fetch Personalized Recommendations (Isolated Error Boundary)
+      // Fetch Personalized Recommendations (Isolated Error Boundary)
       if (user) {
         try {
           const forYouRes = await api.get('/home/for-you');
@@ -108,7 +107,6 @@ export default function HomePage() {
           const status = forYouErr.status || forYouErr.response?.status;
           const msg = (forYouErr.data?.message || forYouErr.message || '').toLowerCase();
 
-          // Suppress banner for benign states (unauthenticated, missing follows, or empty categories)
           const isBenignState =
             status === 401 ||
             status === 403 ||
@@ -160,9 +158,22 @@ export default function HomePage() {
     }
   };
 
+  const handleOnboardingComplete = () => {
+    if (updateUser) {
+      updateUser({ ...user, has_onboarded: true });
+    }
+    // Refresh landing recommendations
+    window.location.reload();
+  };
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#09090b', color: '#f4f4f5', display: 'flex', flexDirection: 'column' }}>
       <Navbar />
+
+      {/* POPUP ONBOARDING MODAL FOR NEW USERS */}
+      {user && user.has_onboarded === false && (
+        <OnboardingModal onComplete={handleOnboardingComplete} />
+      )}
 
       <style>{`
         .topic-pill {
@@ -208,7 +219,7 @@ export default function HomePage() {
       <main style={{ maxWidth: 1120, width: '100%', margin: '0 auto', padding: '2.5rem 1.5rem', flex: 1 }}>
         {errorMsg && <div className="auth-alert error" style={{ marginBottom: '2rem' }}>{errorMsg}</div>}
 
-        {/* 1. HERO: MINIMAL HEADER + SEARCH BAR + TOP CATEGORIES */}
+        {/* 1. HERO SECTION */}
         <section style={{ textAlign: 'center', marginBottom: '4.5rem', marginTop: '1rem' }}>
           <h1 style={{
             fontSize: 'clamp(2.2rem, 5vw, 3.4rem)',
@@ -222,7 +233,6 @@ export default function HomePage() {
             Explore the Collective Knowledge of Humanity
           </h1>
 
-          {/* Search Form */}
           <form
             onSubmit={handleSearchSubmit}
             style={{
@@ -264,7 +274,6 @@ export default function HomePage() {
             />
           </form>
 
-          {/* Top 5-6 Topics / Categories with Hover */}
           {categories.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center', alignItems: 'center' }}>
               {categories.slice(0, 6).map((cat) => (
@@ -684,7 +693,7 @@ export default function HomePage() {
               {crossTopicArticles.filter((art) => Number(art.category_rank) === 1).length === 0 ? (
                 <p style={{ color: '#71717a', margin: 0, fontSize: '0.85rem' }}>No rankings available for this timeframe.</p>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.85rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
                   {crossTopicArticles
                     .filter((art) => Number(art.category_rank) === 1)
                     .map((art) => (
@@ -866,7 +875,7 @@ export default function HomePage() {
             <span style={{ fontWeight: 700, color: '#f4f4f5', letterSpacing: '-0.02em', marginRight: '0.75rem' }}>
               WikiWiki
             </span>
-            <span>The open, collaborative multi-topic encyclopedia.</span>
+            <span>The collaborative engineering and algorithm encyclopedia.</span>
           </div>
 
           <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center' }}>

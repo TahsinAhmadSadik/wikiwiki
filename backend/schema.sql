@@ -923,3 +923,165 @@ WHERE is_published = FALSE AND approver_id IS NULL;
 UPDATE article_versions
 SET review_status = 'approved'
 WHERE is_published = TRUE OR approver_id IS NOT NULL;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- ============================================================================
+-- 1. CREATE SHADOW AUDIT LOG TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS article_rollback_logs (
+    log_id SERIAL PRIMARY KEY,
+    article_id INT NOT NULL REFERENCES articles(article_id) ON DELETE CASCADE,
+    user_id INT REFERENCES users(user_id) ON DELETE SET NULL,
+    report_id INT REFERENCES reports(report_id) ON DELETE SET NULL,
+    prev_version INT NOT NULL,
+    new_version INT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rollback_logs_article ON article_rollback_logs(article_id, created_at DESC);
+
+-- ============================================================================
+-- 2. ADD AUDIT HELPER COLUMNS TO article_versions
+-- ============================================================================
+ALTER TABLE article_versions ADD COLUMN IF NOT EXISTS rollback_from_version INT;
+ALTER TABLE article_versions ADD COLUMN IF NOT EXISTS rollback_report_id INT REFERENCES reports(report_id) ON DELETE SET NULL;
+
+-- ============================================================================
+-- 3. TRIGGER FUNCTION: Automatically Record Rollbacks to Shadow Table
+-- ============================================================================
+CREATE OR REPLACE FUNCTION fn_trg_log_article_rollback()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Detect when a version is activated via an authorized rollback action
+    IF NEW.is_published = TRUE AND NEW.rollback_from_version IS NOT NULL THEN
+        INSERT INTO article_rollback_logs (
+            article_id,
+            user_id,
+            report_id,
+            prev_version,
+            new_version,
+            created_at
+        ) VALUES (
+            NEW.article_id,
+            NEW.approver_id,
+            NEW.rollback_report_id,
+            NEW.rollback_from_version,
+            NEW.version_number,
+            CURRENT_TIMESTAMP
+        );
+
+        -- Clear temporary rollback metadata to keep row clean
+        NEW.rollback_from_version := NULL;
+        NEW.rollback_report_id := NULL;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_article_versions_rollback ON article_versions;
+CREATE TRIGGER trg_article_versions_rollback
+BEFORE UPDATE OF is_published ON article_versions
+FOR EACH ROW
+EXECUTE FUNCTION fn_trg_log_article_rollback();
+
+-- ============================================================================
+-- 4. UPDATE STORED PROCEDURE TO FEED AUDIT TRIGGER
+-- ============================================================================
+CREATE OR REPLACE PROCEDURE sp_resolve_report_and_penalize(
+    p_report_id BIGINT,
+    p_resolver_id BIGINT,
+    p_action TEXT,
+    p_demerit_points BIGINT DEFAULT 0,
+    p_rollback_version_id BIGINT DEFAULT NULL
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_target_user_id BIGINT;
+    v_new_demerits BIGINT;
+    v_article_id BIGINT;
+    v_prev_version INT;
+BEGIN
+    -- 1. Update report resolution status, audit details, and demerits recorded
+    UPDATE reports
+    SET status = p_action,
+        resolver_id = p_resolver_id,
+        resolved_at = CURRENT_TIMESTAMP,
+        demerit_points = p_demerit_points::INT
+    WHERE report_id = p_report_id
+    RETURNING article_id INTO v_article_id;
+
+    -- 2. Locate editor of the flagged version
+    SELECT av.editor_id INTO v_target_user_id
+    FROM reports r
+    LEFT JOIN article_versions av ON r.version_id = av.version_id
+    WHERE r.report_id = p_report_id;
+
+    -- Fallback: locate latest editor if reported at article level
+    IF v_target_user_id IS NULL THEN
+        SELECT av.editor_id INTO v_target_user_id
+        FROM reports r
+        INNER JOIN article_versions av ON r.article_id = av.article_id
+        WHERE r.report_id = p_report_id
+        ORDER BY av.version_number DESC
+        LIMIT 1;
+    END IF;
+
+    -- 3. Apply demerits if points > 0 and editor exists
+    IF p_demerit_points > 0 AND v_target_user_id IS NOT NULL THEN
+        UPDATE users
+        SET demerit_points = COALESCE(demerit_points, 0) + p_demerit_points
+        WHERE user_id = v_target_user_id
+        RETURNING demerit_points INTO v_new_demerits;
+
+        IF v_new_demerits >= 5 THEN
+            UPDATE users
+            SET is_banned = TRUE,
+                token_version = token_version + 1
+            WHERE user_id = v_target_user_id;
+        END IF;
+    END IF;
+
+    -- 4. Execute atomic version rollback workflow with trigger logging
+    IF p_rollback_version_id IS NOT NULL AND v_article_id IS NOT NULL THEN
+        -- Locate active version number prior to deactivation
+        SELECT COALESCE(version_number, 1) INTO v_prev_version
+        FROM article_versions
+        WHERE article_id = v_article_id AND is_published = TRUE
+        LIMIT 1;
+
+        -- Deactivate all existing versions
+        UPDATE article_versions
+        SET is_published = FALSE
+        WHERE article_id = v_article_id;
+
+        -- Activate target version (fires trg_article_versions_rollback!)
+        UPDATE article_versions
+        SET is_published = TRUE,
+            review_status = 'approved',
+            approver_id = p_resolver_id,
+            rollback_from_version = COALESCE(v_prev_version, 1),
+            rollback_report_id = p_report_id
+        WHERE version_id = p_rollback_version_id
+          AND article_id = v_article_id;
+
+        -- Update parent article
+        UPDATE articles
+        SET is_published = TRUE
+        WHERE article_id = v_article_id;
+    END IF;
+END;
+$$;

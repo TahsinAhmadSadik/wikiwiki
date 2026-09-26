@@ -109,7 +109,12 @@ export default function ArticlePage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
 
-  // Custom Modal States (Replacing browser alerts & confirms)
+  // Rollback Trigger Audit Log Modal States (Author/Admin Only)
+  const [isLogsModalOpen, setIsLogsModalOpen] = useState(false);
+  const [rollbackLogs, setRollbackLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
+  // Custom Confirmation & Alert Modal States
   const [versionToRollback, setVersionToRollback] = useState(null);
   const [isRollbackConfirmOpen, setIsRollbackConfirmOpen] = useState(false);
   const [alertModalState, setAlertModalState] = useState({
@@ -184,6 +189,26 @@ export default function ArticlePage() {
     }
   };
 
+  // Fetch trigger-generated shadow audit logs from database
+  const loadRollbackLogs = async () => {
+    if (!data?.article?.article_id) return;
+    setLoadingLogs(true);
+    try {
+      const res = await api.get(`/articles/${data.article.article_id}/rollback-logs`);
+      setRollbackLogs(res.logs || []);
+      setIsLogsModalOpen(true);
+    } catch (err) {
+      setAlertModalState({
+        isOpen: true,
+        title: 'Error',
+        message: err.data?.message || err.message || 'Failed to load rollback audit logs.',
+        isError: true
+      });
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
   const handlePromptRollback = (ver) => {
     setIsHistoryOpen(false);
     setVersionToRollback(ver);
@@ -205,7 +230,7 @@ export default function ArticlePage() {
       await fetchArticle(null);
 
       setLockStatusMsg(res.message || `Successfully restored Version ${versionToRollback.version_number}`);
-      setTimeout(() => setLockStatusMsg(''), 4000);
+      setTimeout(() => setLockStatusMsg(''), 4500);
       setVersionToRollback(null);
     } catch (err) {
       setAlertModalState({
@@ -401,7 +426,7 @@ export default function ArticlePage() {
             </h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
               Are you sure you want to restore <strong>Version {versionToRollback.version_number}</strong> as the active published revision?
-              This will update the live article, metadata excerpts, and referenced knowledge links.
+              This action will be automatically recorded in the database rollback audit shadow table via trigger.
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -445,7 +470,137 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 3. CONTRIBUTION MANAGEMENT MODAL */}
+      {/* 3. ROLLBACK TRIGGER AUDIT LOG MODAL (AUTHOR / ADMIN ONLY) */}
+      {isLogsModalOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 660, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '0.85rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🛡️</span> Rollback Audit Trail
+                </h3>
+                <span style={{ fontSize: '0.78rem', color: '#71717a' }}>
+                  Auto-generated via database trigger (<code>trg_article_versions_rollback</code>) • Read Only
+                </span>
+              </div>
+              <button
+                onClick={() => setIsLogsModalOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: '1.25rem' }}
+              >
+                ✕
+              </button>
+            </header>
+
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {rollbackLogs.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#71717a' }}>
+                  <p style={{ margin: 0, fontSize: '0.9rem' }}>No rollback operations have been logged for this article yet.</p>
+                </div>
+              ) : (
+                rollbackLogs.map((log) => {
+                  const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(log.user_name || 'System')}`;
+                  const avatarSrc = log.user_pic || fallbackAvatar;
+
+                  return (
+                    <div
+                      key={log.log_id}
+                      style={{
+                        backgroundColor: '#121215',
+                        border: '1px solid #27272a',
+                        padding: '0.9rem 1.15rem',
+                        borderRadius: 8,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        {/* Transition Version Badge */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{
+                            backgroundColor: 'rgba(234, 179, 8, 0.15)',
+                            color: '#eab308',
+                            border: '1px solid rgba(234, 179, 8, 0.35)',
+                            padding: '0.2rem 0.6rem',
+                            borderRadius: 6,
+                            fontSize: '0.8rem',
+                            fontWeight: 700
+                          }}>
+                            Version {log.prev_version} ➔ Version {log.new_version}
+                          </span>
+                          <span style={{ fontSize: '0.72rem', color: '#71717a' }}>
+                            Log Entry #{log.log_id}
+                          </span>
+                        </div>
+
+                        {/* Timestamp */}
+                        <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
+                          {new Date(log.created_at).toLocaleString()}
+                        </span>
+                      </div>
+
+                      {/* Actor Information & Trigger Context */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', borderTop: '1px solid #1a1a1e', paddingTop: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <img
+                            src={avatarSrc}
+                            alt={log.user_name}
+                            style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover', backgroundColor: '#18181b' }}
+                            onError={(e) => { e.currentTarget.src = fallbackAvatar; }}
+                          />
+                          <span style={{ fontSize: '0.8rem', color: '#d4d4d8' }}>
+                            Executed by <strong>{log.user_name}</strong>
+                          </span>
+                        </div>
+
+                        {log.report_id ? (
+                          <span style={{
+                            fontSize: '0.75rem',
+                            color: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 4
+                          }}>
+                            🚩 Moderation Report #{log.report_id} {log.report_reason ? `("${log.report_reason.slice(0, 30)}...")` : ''}
+                          </span>
+                        ) : (
+                          <span style={{
+                            fontSize: '0.75rem',
+                            color: '#38bdf8',
+                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                            border: '1px solid rgba(56, 189, 248, 0.25)',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 4
+                          }}>
+                            👤 Direct Author/Admin Rollback
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <footer style={{ borderTop: '1px solid #1f1f23', paddingTop: '0.75rem', marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.72rem', color: '#52525b' }}>
+                🔒 Immutable database shadow table record
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsLogsModalOpen(false)}
+                className="auth-btn"
+                style={{ width: 'auto', padding: '0.4rem 1rem', fontSize: '0.8rem' }}
+              >
+                Close
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* 4. CONTRIBUTION MANAGEMENT MODAL */}
       {isContribModalOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 520 }}>
@@ -534,7 +689,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 4. HISTORICAL VERSION ARCHIVE BANNER */}
+      {/* 5. HISTORICAL VERSION ARCHIVE BANNER */}
       {isViewingHistorical && (
         <div style={{
           backgroundColor: '#18181b',
@@ -592,7 +747,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 5. VERSION HISTORY MODAL */}
+      {/* 6. VERSION HISTORY MODAL */}
       {isHistoryOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 620, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
@@ -685,7 +840,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 6. CONFIRM DELETE MODAL */}
+      {/* 7. CONFIRM DELETE MODAL */}
       {isDeleteModalOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 460 }}>
@@ -693,7 +848,7 @@ export default function ArticlePage() {
               Delete Article Permanently?
             </h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
-              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, and bookmarked list entries[cite: 22].
+              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, rollback audit logs, and bookmarked list entries[cite: 22].
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -727,7 +882,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 7. REPORT MODAL */}
+      {/* 8. REPORT MODAL */}
       {isReportOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 480 }}>
@@ -873,6 +1028,27 @@ export default function ArticlePage() {
               >
                 🕒 History (v{latestVersion?.version_number})
               </button>
+
+              {/* HIDDEN ROLLBACK AUDIT LOG BUTTON (AUTHORS/ADMINS ONLY) */}
+              {canManageArticle && (
+                <button
+                  type="button"
+                  onClick={loadRollbackLogs}
+                  disabled={loadingLogs}
+                  style={{
+                    backgroundColor: '#18181b',
+                    border: '1px solid #27272a',
+                    color: '#f4f4f5',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.85rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="View auto-generated database trigger rollback log"
+                >
+                  {loadingLogs ? 'Loading...' : '🛡️ Audit Log'}
+                </button>
+              )}
 
               {/* TOGGLE / MANAGE CONTRIBUTION REQUEST BUTTON */}
               {canManageArticle && (

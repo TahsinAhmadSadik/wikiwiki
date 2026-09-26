@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -67,12 +68,21 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    const created = await prisma.$queryRaw`
+const created = await withTransaction(async (client) => {
+  const result = await client.query(
+    `
       INSERT INTO categories (name, parent_id)
-      VALUES (${trimmedName}, ${parentId})
-      RETURNING category_id::INT AS category_id, name, parent_id::INT AS parent_id;
-    `;
+      VALUES ($1, $2)
+      RETURNING
+        category_id::INT AS category_id,
+        name,
+        parent_id::INT AS parent_id
+    `,
+    [trimmedName, parentId]
+  );
 
+  return result.rows;
+});
     res.status(201).json({
       success: true,
       message: `Category "${trimmedName}" created successfully.`,

@@ -129,8 +129,8 @@ router.post('/', authenticateToken, async (req, res) => {
         [userId, wiki.wiki_id]
       );
 
-      return wiki;
-    });
+  return wiki;
+});
 
     res.status(201).json({
       success: true,
@@ -165,12 +165,21 @@ router.patch('/:wikiId/cover', authenticateToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
-    await prisma.$executeRaw`
+await withTransaction(async (client) => {
+  await client.query(
+    `
       UPDATE wiki_spaces
-      SET cover_image_url = ${cover_image_url || null},
-          media_id = ${media_id ? Number(media_id) : null}
-      WHERE wiki_id = ${wikiId};
-    `;
+      SET cover_image_url = $1,
+          media_id = $2
+      WHERE wiki_id = $3
+    `,
+    [
+      cover_image_url || null,
+      media_id ? Number(media_id) : null,
+      wikiId
+    ]
+  );
+});
 
     res.status(200).json({
       success: true,
@@ -347,12 +356,17 @@ router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author')
     const targetUser = users[0];
     if (targetUser.is_banned) return res.status(400).json({ success: false, message: 'Cannot assign a banned user' });
 
-    await prisma.$executeRaw`
+ await withTransaction(async (client) => {
+  await client.query(
+    `
       INSERT INTO wiki_memberships (user_id, wiki_id, role)
-      VALUES (${targetUser.user_id}, ${wikiId}, 'co_author'::wiki_role_enum)
+      VALUES ($1, $2, 'co_author'::wiki_role_enum)
       ON CONFLICT (user_id, wiki_id)
-      DO UPDATE SET role = 'co_author'::wiki_role_enum;
-    `;
+      DO UPDATE SET role = 'co_author'::wiki_role_enum
+    `,
+    [targetUser.user_id, wikiId]
+  );
+});
 
     res.status(200).json({
       success: true,

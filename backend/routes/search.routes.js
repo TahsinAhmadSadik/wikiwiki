@@ -273,10 +273,11 @@ router.get('/', async (req, res) => {
               w.title ILIKE '%' || ${searchTerm}::TEXT || '%' 
               OR COALESCE(w.description, '') ILIKE '%' || ${searchTerm}::TEXT || '%'
             )
-          ORDER BY 
-            CASE WHEN ${sort}::TEXT = 'alpha' THEN w.title END ASC,
-            w.total_views DESC
-          LIMIT 20;
+     ORDER BY 
+  CASE WHEN ${sort}::TEXT = 'alpha' THEN w.title END ASC,
+  CASE WHEN ${sort}::TEXT = 'new_created' THEN w.created_at END DESC,
+  w.total_views DESC
+LIMIT 20;
         `;
       } else {
         wikis = await prisma.$queryRaw`
@@ -295,10 +296,11 @@ router.get('/', async (req, res) => {
           FROM wiki_spaces w
           LEFT JOIN media m ON w.media_id = m.media_id
           WHERE (${categoryIds}::INT[] IS NULL OR w.category_id = ANY(${categoryIds}::INT[]))
-          ORDER BY 
-            CASE WHEN ${sort}::TEXT = 'alpha' THEN w.title END ASC,
-            w.total_views DESC
-          LIMIT 20;
+     ORDER BY 
+  CASE WHEN ${sort}::TEXT = 'alpha' THEN w.title END ASC,
+  CASE WHEN ${sort}::TEXT = 'new_created' THEN w.created_at END DESC,
+  w.total_views DESC
+LIMIT 20;
         `;
       }
     }

@@ -375,8 +375,8 @@ router.post('/', authenticateToken, async (req, res) => {
         await syncArticleLinks(client, article.article_id, Number(wiki_id), content);
       }
 
-      return article;
-    });
+  return article;
+});
 
     res.status(201).json({
       success: true,

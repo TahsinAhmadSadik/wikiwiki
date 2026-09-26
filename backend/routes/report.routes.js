@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -50,16 +51,26 @@ router.post('/', authenticateToken, async (req, res) => {
       });
     }
 
-    await prisma.$executeRaw`
-      INSERT INTO reports (article_id, version_id, reporter_id, reason, status)
-      VALUES (
-        ${Number(article_id)},
-        ${version_id ? Number(version_id) : null},
-        ${reporterId},
-        ${reason.trim()},
-        'pending'
-      );
-    `;
+await withTransaction(async (client) => {
+  await client.query(
+    `
+      INSERT INTO reports (
+        article_id,
+        version_id,
+        reporter_id,
+        reason,
+        status
+      )
+      VALUES ($1, $2, $3, $4, 'pending')
+    `,
+    [
+      Number(article_id),
+      version_id ? Number(version_id) : null,
+      reporterId,
+      reason.trim()
+    ]
+  );
+});
 
     res.status(201).json({
       success: true,

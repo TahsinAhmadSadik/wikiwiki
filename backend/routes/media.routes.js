@@ -79,6 +79,8 @@ router.post('/upload', optionalAuth, (req, res) => {
         return mediaItem;
       });
 
+  return mediaItem;
+});
       return res.status(201).json({
         success: true,
         media_id: savedMedia.media_id,

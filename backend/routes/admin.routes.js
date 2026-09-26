@@ -1,5 +1,6 @@
 import express from 'express';
 import { prisma } from '../lib/prisma.js';
+import { withTransaction } from '../lib/db.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -32,11 +33,16 @@ router.patch('/roles', authenticateToken, requireRole('owner'), async (req, res)
       return res.status(400).json({ success: false, message: 'Cannot modify the site owner' });
     }
 
-    await prisma.$executeRaw`
+  await withTransaction(async (client) => {
+  await client.query(
+    `
       UPDATE users
-      SET global_role = ${role}::global_role_enum
-      WHERE user_id = ${target.user_id};
-    `;
+      SET global_role = $1::global_role_enum
+      WHERE user_id = $2
+    `,
+    [role, target.user_id]
+  );
+});
 
     res.status(200).json({
       success: true,

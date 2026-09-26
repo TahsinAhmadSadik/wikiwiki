@@ -81,7 +81,7 @@ router.get('/top-reads', async (req, res) => {
 router.get('/topic-performance', async (req, res) => {
   try {
     const categoryId = Number(req.query.category_id);
-    const days = Number(req.query.days) || 30;
+    const days = req.query.days !== undefined && !isNaN(Number(req.query.days))  ? Number(req.query.days)  : 30;
     const limit = Math.min(Math.max(Number(req.query.limit) || 6, 1), 20);
 
     if (!categoryId || isNaN(categoryId)) {

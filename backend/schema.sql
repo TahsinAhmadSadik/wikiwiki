@@ -816,3 +816,110 @@ BEGIN
     LIMIT p_limit;
 END;
 $$ LANGUAGE plpgsql;
+
+
+
+
+
+
+
+
+
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize(BIGINT, BIGINT, TEXT, BIGINT);
+DROP PROCEDURE IF EXISTS sp_resolve_report_and_penalize(BIGINT, BIGINT, TEXT, BIGINT, BIGINT);
+
+CREATE OR REPLACE PROCEDURE sp_resolve_report_and_penalize(
+    p_report_id BIGINT,
+    p_resolver_id BIGINT,
+    p_action TEXT,
+    p_demerit_points BIGINT DEFAULT 0,
+    p_rollback_version_id BIGINT DEFAULT NULL
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_target_user_id BIGINT;
+    v_new_demerits BIGINT;
+    v_article_id BIGINT;
+BEGIN
+    -- 1. Update report resolution status, audit details, and demerits recorded
+    UPDATE reports
+    SET status = p_action,
+        resolver_id = p_resolver_id,
+        resolved_at = CURRENT_TIMESTAMP,
+        demerit_points = p_demerit_points::INT
+    WHERE report_id = p_report_id
+    RETURNING article_id INTO v_article_id;
+
+    -- 2. Locate editor of the flagged version
+    SELECT av.editor_id INTO v_target_user_id
+    FROM reports r
+    LEFT JOIN article_versions av ON r.version_id = av.version_id
+    WHERE r.report_id = p_report_id;
+
+    -- Fallback: If reported at article level, find the latest version's author
+    IF v_target_user_id IS NULL THEN
+        SELECT av.editor_id INTO v_target_user_id
+        FROM reports r
+        INNER JOIN article_versions av ON r.article_id = av.article_id
+        WHERE r.report_id = p_report_id
+        ORDER BY av.version_number DESC
+        LIMIT 1;
+    END IF;
+
+    -- 3. Apply demerits if points > 0 and editor exists
+    IF p_demerit_points > 0 AND v_target_user_id IS NOT NULL THEN
+        UPDATE users
+        SET demerit_points = COALESCE(demerit_points, 0) + p_demerit_points
+        WHERE user_id = v_target_user_id
+        RETURNING demerit_points INTO v_new_demerits;
+
+        -- Auto-ban policy: demerits >= 5 revokes sessions and bans user
+        IF v_new_demerits >= 5 THEN
+            UPDATE users
+            SET is_banned = TRUE,
+                token_version = token_version + 1
+            WHERE user_id = v_target_user_id;
+        END IF;
+    END IF;
+
+    -- 4. Optional Version Rollback Workflow
+    IF p_rollback_version_id IS NOT NULL AND v_article_id IS NOT NULL THEN
+        -- Mark all versions of this article as inactive
+        UPDATE article_versions
+        SET is_published = FALSE
+        WHERE article_id = v_article_id;
+
+        -- Activate the designated target version
+        UPDATE article_versions
+        SET is_published = TRUE
+        WHERE version_id = p_rollback_version_id
+          AND article_id = v_article_id;
+
+        -- Ensure parent article reflects published status
+        UPDATE articles
+        SET is_published = TRUE
+        WHERE article_id = v_article_id;
+    END IF;
+END;
+$$;
+
+
+
+
+
+
+-- 1. Add review_status column to article_versions
+ALTER TABLE article_versions 
+ADD COLUMN IF NOT EXISTS review_status VARCHAR(30) DEFAULT 'approved';
+
+-- 2. Backfill: Set genuinely unreviewed drafts to 'pending'
+-- (Drafts that have never been published and have no approver_id)
+UPDATE article_versions
+SET review_status = 'pending'
+WHERE is_published = FALSE AND approver_id IS NULL;
+
+-- 3. Ensure all previously published or approved versions are marked 'approved'
+UPDATE article_versions
+SET review_status = 'approved'
+WHERE is_published = TRUE OR approver_id IS NOT NULL;

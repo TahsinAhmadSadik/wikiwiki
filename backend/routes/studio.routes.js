@@ -49,7 +49,7 @@ router.get('/library', authenticateToken, async (req, res) => {
       FROM article_versions av
       INNER JOIN articles a ON av.article_id = a.article_id
       INNER JOIN wiki_spaces w ON a.wiki_id = w.wiki_id
-      WHERE av.editor_id = ${userId} AND av.is_published = FALSE
+      WHERE av.editor_id = ${userId} AND av.review_status = 'pending'
       ORDER BY av.created_at DESC;
     `;
 

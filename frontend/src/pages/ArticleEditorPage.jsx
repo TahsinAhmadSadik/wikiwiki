@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import { useAuth } from '../context/AuthContext';
@@ -103,6 +103,10 @@ export default function ArticleEditorPage() {
     { id: '1', type: 'paragraph', data: { text: '' } }
   ]);
 
+  // DOM refs to textareas and active cursor tracking
+  const textareaRefs = useRef({});
+  const lastActiveBlockRef = useRef({ id: '1', start: 0, end: 0 });
+
   const [uploadingBlockId, setUploadingBlockId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -146,6 +150,10 @@ export default function ArticleEditorPage() {
 
           if (artRes.latestVersion?.content?.blocks) {
             setBlocks(artRes.latestVersion.content.blocks);
+            const firstP = artRes.latestVersion.content.blocks.find((b) => b.type === 'paragraph');
+            if (firstP) {
+              lastActiveBlockRef.current = { id: firstP.id, start: 0, end: 0 };
+            }
           }
         } else {
           let defaultWiki = null;
@@ -237,6 +245,66 @@ export default function ArticleEditorPage() {
     );
   };
 
+  const handleCursorUpdate = (blockId, e) => {
+    lastActiveBlockRef.current = {
+      id: blockId,
+      start: e.target.selectionStart ?? 0,
+      end: e.target.selectionEnd ?? 0
+    };
+  };
+
+  // Universal button handler: inserts sample link into active paragraph at cursor position
+  const handleUniversalInsertLink = (linkText = '[[Introduction to Python]]') => {
+    let targetBlockId = lastActiveBlockRef.current.id;
+    let targetBlock = blocks.find((b) => b.id === targetBlockId && b.type === 'paragraph');
+
+    // Fall back to the most recent paragraph block if none was active
+    if (!targetBlock) {
+      targetBlock = [...blocks].reverse().find((b) => b.type === 'paragraph');
+      if (targetBlock) {
+        targetBlockId = targetBlock.id;
+        lastActiveBlockRef.current = {
+          id: targetBlockId,
+          start: (targetBlock.data?.text || '').length,
+          end: (targetBlock.data?.text || '').length
+        };
+      }
+    }
+
+    // If there is still no paragraph block in the article, create one with the link
+    if (!targetBlock) {
+      const newId = String(Date.now());
+      setBlocks((prev) => [...prev, { id: newId, type: 'paragraph', data: { text: linkText } }]);
+      lastActiveBlockRef.current = { id: newId, start: linkText.length, end: linkText.length };
+      return;
+    }
+
+    const textarea = textareaRefs.current[targetBlockId];
+    const currentText = targetBlock.data?.text || '';
+    const start = textarea?.selectionStart ?? lastActiveBlockRef.current.start ?? currentText.length;
+    const end = textarea?.selectionEnd ?? lastActiveBlockRef.current.end ?? currentText.length;
+
+    const before = currentText.substring(0, start);
+    const after = currentText.substring(end);
+
+    const needsSpaceBefore = before.length > 0 && !before.endsWith(' ');
+    const needsSpaceAfter = after.length > 0 && !after.startsWith(' ');
+
+    const formattedLink = `${needsSpaceBefore ? ' ' : ''}${linkText}${needsSpaceAfter ? ' ' : ''}`;
+    const newText = before + formattedLink + after;
+
+    handleBlockChange(targetBlockId, newText);
+
+    setTimeout(() => {
+      if (textarea) {
+        textarea.focus();
+        const newCursorPos = start + formattedLink.length;
+        textarea.setSelectionRange(newCursorPos, newCursorPos);
+        lastActiveBlockRef.current = { id: targetBlockId, start: newCursorPos, end: newCursorPos };
+      }
+    }, 0);
+  };
+
   const handleImageBlockChange = (id, field, value) => {
     setBlocks((prev) =>
       prev.map((b) =>
@@ -314,12 +382,16 @@ export default function ArticleEditorPage() {
   };
 
   const handleAddBlock = (type) => {
+    const newId = String(Date.now());
     const newBlock = {
-      id: String(Date.now()),
+      id: newId,
       type,
       data: type === 'image' ? { url: '', caption: '' } : { text: '' }
     };
     setBlocks([...blocks, newBlock]);
+    if (type === 'paragraph') {
+      lastActiveBlockRef.current = { id: newId, start: 0, end: 0 };
+    }
   };
 
   const handleRemoveBlock = (id) => {
@@ -332,7 +404,6 @@ export default function ArticleEditorPage() {
     return url.startsWith('http') ? url : `${API_BASE}${url}`;
   };
 
-  // Submit Handler
   const handlePublish = async (e) => {
     e.preventDefault();
     if (!title.trim()) {
@@ -801,10 +872,15 @@ export default function ArticleEditorPage() {
               {b.type === 'paragraph' && (
                 <div style={{ flex: 1 }}>
                   <textarea
+                    ref={(el) => { textareaRefs.current[b.id] = el; }}
                     rows={3}
                     placeholder="Write content paragraph (supports [[Wiki Link]] syntax)..."
                     value={b.data?.text || ''}
                     onChange={(e) => handleBlockChange(b.id, e.target.value)}
+                    onFocus={(e) => handleCursorUpdate(b.id, e)}
+                    onSelect={(e) => handleCursorUpdate(b.id, e)}
+                    onKeyUp={(e) => handleCursorUpdate(b.id, e)}
+                    onClick={(e) => handleCursorUpdate(b.id, e)}
                     className="auth-input"
                     style={{ resize: 'vertical', lineHeight: 1.6 }}
                   />
@@ -889,6 +965,7 @@ export default function ArticleEditorPage() {
             </div>
           ))}
 
+          {/* ACTION TOOLBAR */}
           <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -925,8 +1002,8 @@ export default function ArticleEditorPage() {
               onClick={() => handleAddBlock('image')}
               style={{
                 backgroundColor: '#141417',
-                border: '1px dashed #a855f7',
-                color: '#c084fc',
+                border: '1px dashed #3f3f46',
+                color: '#d4d4d8',
                 borderRadius: 6,
                 padding: '0.45rem 0.85rem',
                 fontSize: '0.8rem',
@@ -934,6 +1011,28 @@ export default function ArticleEditorPage() {
               }}
             >
               🖼️ + Add Image Block
+            </button>
+
+            {/* Universal Wiki Link Inserter */}
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handleUniversalInsertLink('[Link_Text](/wiki/wiki_name/article_slug)')}
+              style={{
+                backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                border: '1px dashed #a855f7',
+                color: '#c084fc',
+                borderRadius: 6,
+                padding: '0.45rem 0.85rem',
+                fontSize: '0.8rem',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem'
+              }}
+              title="Insert a sample link into the active paragraph at cursor position"
+            >
+              🔗 + Insert Article Link
             </button>
           </div>
         </section>

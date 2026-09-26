@@ -516,7 +516,7 @@ export default function WikiPage() {
                 <Link
                   to={`/editor?wikiId=${wiki.wiki_id}`}
                   className="auth-btn"
-                  style={{ width: 'auto', padding: '0.55rem 1.15rem', textDecoration: 'none' }}
+                  style={{ width: 'auto', padding: '0.55rem 1.15rem', textDecoration: 'none', margin: 0 }}
                 >
                   + New Article
                 </Link>

@@ -181,13 +181,12 @@ export default function Navbar() {
             }}
           >
             <img
-              src="/favicon.svg"
+              src="/logo.png"
               alt="WikiWiki Logo"
               className="logo-hover-effect"
               style={{
                 width: 24,
                 height: 24,
-                filter: 'brightness(0) invert(1)',
                 display: 'block'
               }}
             />

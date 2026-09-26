@@ -219,7 +219,7 @@ export default function HomePage() {
             WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent'
           }}>
-            Explore the Architecture of Code
+            Explore the Collective Knowledge of Humanity
           </h1>
 
           {/* Search Form */}
@@ -866,7 +866,7 @@ export default function HomePage() {
             <span style={{ fontWeight: 700, color: '#f4f4f5', letterSpacing: '-0.02em', marginRight: '0.75rem' }}>
               WikiWiki
             </span>
-            <span>The collaborative engineering and algorithm encyclopedia.</span>
+            <span>The open, collaborative multi-topic encyclopedia.</span>
           </div>
 
           <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center' }}>

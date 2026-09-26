@@ -1078,59 +1078,21 @@ export default function ArticlePage() {
               )}
 
               {canManageArticle && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleToggleLock}
-                    style={{
-                      background: article.is_locked ? 'rgba(239, 68, 68, 0.15)' : '#18181b',
-                      border: article.is_locked ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid #27272a',
-                      color: article.is_locked ? '#ef4444' : '#a1a1aa',
-                      borderRadius: 6,
-                      padding: '0.5rem 0.75rem',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem'
-                    }}
-                    title={article.is_locked ? 'Unlock Article' : 'Lock Article'}
-                  >
-                    {article.is_locked ? '🔒 Locked' : '🔓 Lock'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsDeleteModalOpen(true)}
-                    style={{
-                      background: 'none',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      color: '#ef4444',
-                      borderRadius: 6,
-                      padding: '0.5rem 0.75rem',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem'
-                    }}
-                    title="Delete Article"
-                  >
-                    🗑️
-                  </button>
-                </>
-              )}
-
-              {user && (
                 <button
                   type="button"
-                  onClick={() => setIsReportOpen(true)}
+                  onClick={handleToggleLock}
                   style={{
-                    background: 'none',
-                    border: '1px solid #27272a',
-                    color: '#71717a',
+                    background: article.is_locked ? 'rgba(239, 68, 68, 0.15)' : '#18181b',
+                    border: article.is_locked ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid #27272a',
+                    color: article.is_locked ? '#ef4444' : '#a1a1aa',
                     borderRadius: 6,
                     padding: '0.5rem 0.75rem',
                     cursor: 'pointer',
                     fontSize: '0.85rem'
                   }}
-                  title="Report Article"
+                  title={article.is_locked ? 'Unlock Article' : 'Lock Article'}
                 >
-                  🚩
+                  {article.is_locked ? '🔒 Locked' : '🔓 Lock'}
                 </button>
               )}
 
@@ -1225,6 +1187,44 @@ export default function ArticlePage() {
                 </div>
               )}
 
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => setIsReportOpen(true)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid #27272a',
+                    color: '#71717a',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="Report Article"
+                >
+                  🚩
+                </button>
+              )}
+
+              {canManageArticle && (
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteModalOpen(true)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#ef4444',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="Delete Article"
+                >
+                  🗑️
+                </button>
+              )}
+
               {/* EDIT / CONTRIBUTE */}
               {!user ? (
                 <Link
@@ -1262,7 +1262,7 @@ export default function ArticlePage() {
                     textDecoration: 'none'
                   }}
                 >
-                  ✏️ Contribute / Edit
+                  ✏️ Contribute
                 </Link>
               ) : (
                 <span style={{

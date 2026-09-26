@@ -601,6 +601,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
         a.template_type,
         a.is_locked,
         a.is_published,
+        a.needs_contribution,
         a.read_count::INT AS read_count,
         a.created_at,
         w.title AS wiki_title,
@@ -819,6 +820,66 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
   } catch (error) {
     console.error('Review revision error:', error);
     res.status(500).json({ success: false, message: 'Failed to process revision review' });
+  }
+});
+
+
+// TOGGLE "NEEDS CONTRIBUTION" STATUS
+// 2. ADD TOGGLE & MESSAGE UPDATE ENDPOINT
+router.patch('/:articleId/contribution', authenticateToken, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+    const { needs_contribution, contribution_message = '' } = req.body;
+
+    const articles = await prisma.$queryRaw`
+      SELECT article_id::INT AS article_id, wiki_id::INT AS wiki_id, needs_contribution, contribution_message
+      FROM articles WHERE article_id = ${articleId} LIMIT 1;
+    `;
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article not found' });
+    }
+    const article = articles[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wiki authors or administrators can manage contribution requests.'
+      });
+    }
+
+    const nextState = typeof needs_contribution === 'boolean' 
+      ? needs_contribution 
+      : !article.needs_contribution;
+      
+    const nextMessage = nextState 
+      ? (contribution_message.trim() || 'Authors have requested community contributions, improvements, or section extensions for this topic.')
+      : null;
+
+    const updated = await prisma.$queryRaw`
+      UPDATE articles
+      SET needs_contribution = ${nextState},
+          contribution_message = ${nextMessage}
+      WHERE article_id = ${articleId}
+      RETURNING needs_contribution, contribution_message;
+    `;
+
+    res.status(200).json({
+      success: true,
+      needs_contribution: updated[0].needs_contribution,
+      contribution_message: updated[0].contribution_message,
+      message: updated[0].needs_contribution
+        ? 'Article marked as seeking community contributions.'
+        : 'Contribution request cleared.'
+    });
+  } catch (error) {
+    console.error('Update contribution status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update contribution status' });
   }
 });
 

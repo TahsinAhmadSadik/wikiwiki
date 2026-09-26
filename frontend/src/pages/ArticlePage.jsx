@@ -119,6 +119,11 @@ export default function ArticlePage() {
     isError: false
   });
 
+  // Contribution Management Modal
+  const [isContribModalOpen, setIsContribModalOpen] = useState(false);
+  const [contribMessageInput, setContribMessageInput] = useState('');
+  const [savingContrib, setSavingContrib] = useState(false);
+
   // Report modal states
   const [isReportOpen, setIsReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState('');
@@ -146,6 +151,9 @@ export default function ArticlePage() {
       const res = await api.get(url);
       setData(res);
       setSimilarArticles(res.similarArticles || []);
+      if (res.article) {
+        setContribMessageInput(res.article.contribution_message || '');
+      }
     } catch (err) {
       setError(err.data?.message || err.message);
     } finally {
@@ -176,14 +184,12 @@ export default function ArticlePage() {
     }
   };
 
-  // Trigger modal confirmation
   const handlePromptRollback = (ver) => {
     setIsHistoryOpen(false);
     setVersionToRollback(ver);
     setIsRollbackConfirmOpen(true);
   };
 
-  // Execute restore and refresh the page data
   const handleConfirmRollback = async () => {
     if (!versionToRollback) return;
     setRollingBack(true);
@@ -195,10 +201,7 @@ export default function ArticlePage() {
       setIsRollbackConfirmOpen(false);
       setIsHistoryOpen(false);
 
-      // Clear ?v= from URL
       navigate(`/wiki/${wikiSlug}/${articleSlug}`, { replace: true });
-
-      // Immediately fetch live article data so UI refreshes without manual reload
       await fetchArticle(null);
 
       setLockStatusMsg(res.message || `Successfully restored Version ${versionToRollback.version_number}`);
@@ -213,6 +216,38 @@ export default function ArticlePage() {
       });
     } finally {
       setRollingBack(false);
+    }
+  };
+
+  const handleSaveContributionStatus = async (enable) => {
+    setSavingContrib(true);
+    try {
+      const res = await api.patch(`/articles/${data.article.article_id}/contribution`, {
+        needs_contribution: enable,
+        contribution_message: contribMessageInput
+      });
+
+      setData((prev) => ({
+        ...prev,
+        article: {
+          ...prev.article,
+          needs_contribution: res.needs_contribution,
+          contribution_message: res.contribution_message
+        }
+      }));
+
+      setIsContribModalOpen(false);
+      setLockStatusMsg(res.message);
+      setTimeout(() => setLockStatusMsg(''), 4000);
+    } catch (err) {
+      setAlertModalState({
+        isOpen: true,
+        title: 'Action Failed',
+        message: err.data?.message || err.message || 'Failed to update contribution status.',
+        isError: true
+      });
+    } finally {
+      setSavingContrib(false);
     }
   };
 
@@ -327,6 +362,7 @@ export default function ArticlePage() {
   const isAuthorOrCoAuthor = ['author', 'co_author'].includes(article.userRole);
   const canManageArticle = isGlobal || isAuthorOrCoAuthor;
   const canEdit = !article.is_locked || canManageArticle;
+  const isSeekingContribution = Boolean(article.needs_contribution);
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
@@ -409,7 +445,96 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 3. HISTORICAL VERSION ARCHIVE BANNER */}
+      {/* 3. CONTRIBUTION MANAGEMENT MODAL */}
+      {isContribModalOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 520 }}>
+            <header style={{ marginBottom: '1rem' }}>
+              <h3 style={{ margin: '0 0 0.4rem 0', fontSize: '1.25rem', color: isSeekingContribution ? '#38bdf8' : '#fff' }}>
+                {isSeekingContribution ? '📢 Manage Contribution Request' : '📢 Request Community Contributions'}
+              </h3>
+              <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.45, margin: 0 }}>
+                {isSeekingContribution
+                  ? 'This article is currently marked for community edits. You can update the guidance message or remove the request.'
+                  : 'Highlight this article in the community directory so contributors can find and help improve it.'}
+              </p>
+            </header>
+
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', color: '#d4d4d8', marginBottom: '0.4rem', fontWeight: 600 }}>
+                Guidance Note for Contributors (Optional)
+              </label>
+              <textarea
+                rows={3}
+                className="auth-input"
+                style={{ width: '100%', resize: 'vertical', fontSize: '0.85rem' }}
+                placeholder="e.g., Needs citations for Section 2, additional diagrams, or peer review..."
+                value={contribMessageInput}
+                onChange={(e) => setContribMessageInput(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              {isSeekingContribution ? (
+                <button
+                  type="button"
+                  disabled={savingContrib}
+                  onClick={() => handleSaveContributionStatus(false)}
+                  style={{
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    color: '#ef4444',
+                    borderRadius: 6,
+                    padding: '0.45rem 0.9rem',
+                    fontSize: '0.8125rem',
+                    fontWeight: 500,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {savingContrib ? 'Processing...' : 'Remove Request'}
+                </button>
+              ) : <div />}
+
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  disabled={savingContrib}
+                  onClick={() => setIsContribModalOpen(false)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid #27272a',
+                    color: '#a1a1aa',
+                    borderRadius: 6,
+                    padding: '0.45rem 0.85rem',
+                    fontSize: '0.8125rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingContrib}
+                  onClick={() => handleSaveContributionStatus(true)}
+                  className="auth-btn"
+                  style={{
+                    width: 'auto',
+                    backgroundColor: '#38bdf8',
+                    borderColor: '#38bdf8',
+                    color: '#020617',
+                    fontWeight: 600,
+                    padding: '0.45rem 1.15rem'
+                  }}
+                >
+                  {savingContrib ? 'Saving...' : (isSeekingContribution ? 'Update Note' : 'Confirm & Request')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. HISTORICAL VERSION ARCHIVE BANNER */}
       {isViewingHistorical && (
         <div style={{
           backgroundColor: '#18181b',
@@ -467,7 +592,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 4. VERSION HISTORY MODAL */}
+      {/* 5. VERSION HISTORY MODAL */}
       {isHistoryOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 620, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
@@ -560,7 +685,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 5. CONFIRM DELETE MODAL */}
+      {/* 6. CONFIRM DELETE MODAL */}
       {isDeleteModalOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 460 }}>
@@ -602,7 +727,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 6. REPORT MODAL */}
+      {/* 7. REPORT MODAL */}
       {isReportOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 480 }}>
@@ -663,6 +788,54 @@ export default function ArticlePage() {
           </div>
         )}
 
+        {/* COMMUNITY CONTRIBUTIONS BANNER */}
+        {isSeekingContribution && (
+          <aside style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: 'rgba(56, 189, 248, 0.08)',
+            border: '1px solid rgba(56, 189, 248, 0.35)',
+            borderRadius: 8,
+            padding: '0.9rem 1.25rem',
+            marginBottom: '1.75rem',
+            gap: '1rem',
+            flexWrap: 'wrap',
+            boxShadow: '0 4px 20px rgba(56, 189, 248, 0.06)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+              <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>💡</span>
+              <div>
+                <h4 style={{ margin: 0, fontSize: '0.92rem', color: '#38bdf8', fontWeight: 600 }}>
+                  Community Contributions Requested
+                </h4>
+                <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.825rem', color: '#cbd5e1', lineHeight: 1.45 }}>
+                  {article.contribution_message || 'Authors have invited community improvements, citations, or section extensions for this article.'}
+                </p>
+              </div>
+            </div>
+
+            {canEdit && (
+              <Link
+                to={`/editor?articleId=${article.article_id}`}
+                style={{
+                  backgroundColor: '#38bdf8',
+                  color: '#020617',
+                  padding: '0.4rem 0.95rem',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: '0.8rem',
+                  textDecoration: 'none',
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 2px 8px rgba(56, 189, 248, 0.25)'
+                }}
+              >
+                Contribute Now ✏️
+              </Link>
+            )}
+          </aside>
+        )}
+
         <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '1.25rem', marginBottom: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
@@ -677,6 +850,7 @@ export default function ArticlePage() {
                   </span>
                 )}
               </span>
+
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>
 
@@ -699,6 +873,33 @@ export default function ArticlePage() {
               >
                 🕒 History (v{latestVersion?.version_number})
               </button>
+
+              {/* TOGGLE / MANAGE CONTRIBUTION REQUEST BUTTON */}
+              {canManageArticle && (
+                <button
+                  type="button"
+                  onClick={() => setIsContribModalOpen(true)}
+                  style={{
+                    backgroundColor: isSeekingContribution ? 'rgba(56, 189, 248, 0.18)' : '#18181b',
+                    border: isSeekingContribution ? '1px solid rgba(56, 189, 248, 0.6)' : '1px solid #27272a',
+                    color: isSeekingContribution ? '#38bdf8' : '#a1a1aa',
+                    boxShadow: isSeekingContribution ? '0 0 14px rgba(56, 189, 248, 0.2)' : 'none',
+                    fontWeight: isSeekingContribution ? 600 : 500,
+                    borderRadius: 6,
+                    padding: '0.5rem 0.85rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    transition: 'all 0.2s ease',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem'
+                  }}
+                  title={isSeekingContribution ? 'Article is currently seeking edits. Click to manage note or remove.' : 'Request community edits for this article.'}
+                >
+                  <span>📢</span>
+                  <span>{isSeekingContribution ? 'Seeking Edits (Active)' : 'Mark for Edit'}</span>
+                </button>
+              )}
 
               {canManageArticle && (
                 <>

@@ -23,6 +23,7 @@ export default function Navbar() {
   }, [user, location.pathname]);
 
   const isActive = (path) => location.pathname === path;
+  const isContributeActive = location.pathname === '/search' && location.search.includes('needs_contribution=true');
 
   // Gender-neutral DiceBear bot avatar fallback
   const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(user?.username || 'WikiUser')}`;
@@ -69,6 +70,13 @@ export default function Navbar() {
           color: #fff;
           font-weight: 600;
           background: rgba(255, 255, 255, 0.07);
+        }
+
+        .nav-link.contribute-active {
+          color: #38bdf8;
+          font-weight: 600;
+          background: rgba(56, 189, 248, 0.12);
+          border: 1px solid rgba(56, 189, 248, 0.25);
         }
 
         .nav-icon-btn {
@@ -194,6 +202,15 @@ export default function Navbar() {
               Explore
             </Link>
 
+            {/* DIRECT CONTRIBUTION EXPLORER LINK */}
+            <Link
+              to="/search?needs_contribution=true"
+              className={`nav-link ${isContributeActive ? 'contribute-active' : ''}`}
+              title="Browse articles where authors are seeking community contributions"
+            >
+              <span>📢</span> Contribute
+            </Link>
+
             {user && (
               <>
                 <Link
@@ -240,7 +257,7 @@ export default function Navbar() {
             to="/search"
             className="nav-icon-btn"
             title="Search Articles & Wikis"
-            style={{ borderColor: isActive('/search') ? '#a855f7' : '#27272a' }}
+            style={{ borderColor: isActive('/search') && !isContributeActive ? '#a855f7' : '#27272a' }}
           >
             <svg
               width="17"
@@ -259,7 +276,7 @@ export default function Navbar() {
 
           {user ? (
             <>
-              {/* USERNAME & AVATAR PILL (LINKS TO SETTINGS) */}
+              {/* USERNAME & AVATAR PILL */}
               <Link to="/settings" className="user-highlight-pill" title="Edit Profile & Avatar">
                 <img
                   src={avatarSrc}
@@ -321,7 +338,7 @@ export default function Navbar() {
                 </svg>
               </Link>
 
-              {/* LOGOUT */}
+              {/* LOGOUT BUTTON */}
               <button
                 type="button"
                 onClick={logout}

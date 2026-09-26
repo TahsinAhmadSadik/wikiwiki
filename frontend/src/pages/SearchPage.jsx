@@ -7,25 +7,44 @@ import '../styles/auth.css';
 
 export default function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialQuery = searchParams.get('q') || '';
 
-  const [q, setQ] = useState(initialQuery);
-  const [activeTab, setActiveTab] = useState('all');
-  const [sort, setSort] = useState('relevance');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const queryParam = searchParams.get('q') || '';
+  const catParam = searchParams.get('category_id') || '';
+  const sortParam = searchParams.get('sort') || 'relevance';
+  const typeParam = searchParams.get('type') || 'all';
+  const contributionParam = searchParams.get('needs_contribution') === 'true';
+
+  const [q, setQ] = useState(queryParam);
+  const [activeTab, setActiveTab] = useState(typeParam);
+  const [sort, setSort] = useState(sortParam);
+  const [selectedCategory, setSelectedCategory] = useState(catParam);
+  const [needsContribution, setNeedsContribution] = useState(contributionParam);
 
   // Boolean Advanced Constraints Accordion
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [allWords, setAllWords] = useState('');
-  const [anyWords, setAnyWords] = useState('');
-  const [noneWords, setNoneWords] = useState('');
-  const [exactPhrase, setExactPhrase] = useState('');
+  const [allWords, setAllWords] = useState(searchParams.get('all') || '');
+  const [anyWords, setAnyWords] = useState(searchParams.get('any') || '');
+  const [noneWords, setNoneWords] = useState(searchParams.get('none') || '');
+  const [exactPhrase, setExactPhrase] = useState(searchParams.get('exact') || '');
 
   // Data
   const [articles, setArticles] = useState([]);
   const [wikis, setWikis] = useState([]);
   const [categoryTree, setCategoryTree] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Sync state if URL changes (e.g., clicking "Contribute" in Navbar)
+  useEffect(() => {
+    setQ(searchParams.get('q') || '');
+    setSelectedCategory(searchParams.get('category_id') || '');
+    setSort(searchParams.get('sort') || 'relevance');
+    setActiveTab(searchParams.get('type') || 'all');
+    setNeedsContribution(searchParams.get('needs_contribution') === 'true');
+    setAllWords(searchParams.get('all') || '');
+    setAnyWords(searchParams.get('any') || '');
+    setNoneWords(searchParams.get('none') || '');
+    setExactPhrase(searchParams.get('exact') || '');
+  }, [searchParams]);
 
   useEffect(() => {
     api.get('/search/categories/tree')
@@ -43,10 +62,9 @@ export default function SearchPage() {
       if (noneWords.trim()) params.append('none', noneWords.trim());
       if (exactPhrase.trim()) params.append('exact', exactPhrase.trim());
       if (selectedCategory) params.append('category_id', selectedCategory);
+      if (needsContribution) params.append('needs_contribution', 'true');
       params.append('sort', sort);
       params.append('type', activeTab);
-
-      setSearchParams(params);
 
       const res = await api.get(`/search?${params.toString()}`);
       setArticles(res.articles || []);
@@ -60,11 +78,34 @@ export default function SearchPage() {
 
   useEffect(() => {
     executeSearch();
-  }, [activeTab, sort, selectedCategory]);
+  }, [searchParams, activeTab, sort, selectedCategory, needsContribution]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    executeSearch();
+    const params = new URLSearchParams();
+    if (q.trim()) params.append('q', q.trim());
+    if (allWords.trim()) params.append('all', allWords.trim());
+    if (anyWords.trim()) params.append('any', anyWords.trim());
+    if (noneWords.trim()) params.append('none', noneWords.trim());
+    if (exactPhrase.trim()) params.append('exact', exactPhrase.trim());
+    if (selectedCategory) params.append('category_id', selectedCategory);
+    if (needsContribution) params.append('needs_contribution', 'true');
+    params.append('sort', sort);
+    params.append('type', activeTab);
+
+    setSearchParams(params);
+  };
+
+  const toggleContributionFilter = () => {
+    const nextVal = !needsContribution;
+    setNeedsContribution(nextVal);
+    const newParams = new URLSearchParams(searchParams);
+    if (nextVal) {
+      newParams.set('needs_contribution', 'true');
+    } else {
+      newParams.delete('needs_contribution');
+    }
+    setSearchParams(newParams);
   };
 
   return (
@@ -73,13 +114,17 @@ export default function SearchPage() {
 
       <main style={{ maxWidth: 1100, margin: '2rem auto', padding: '0 1.5rem' }}>
         <header style={{ marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>Search & Explore</h1>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>
+            {needsContribution ? '📢 Articles Seeking Contributions' : 'Search & Explore'}
+          </h1>
           <p style={{ color: '#a1a1aa', margin: 0, fontSize: '0.9rem' }}>
-            Full-text indexing with Boolean logic, trigram matching, and recursive category filtering.
+            {needsContribution
+              ? 'Showing articles flagged by authors requesting edits, section expansions, or peer review.'
+              : 'Full-text indexing with Boolean logic, trigram matching, and recursive category filtering.'}
           </p>
         </header>
 
-        {/* SEARCH BAR & CONTROLS */}
+        {/* SEARCH BAR & ADVANCED TOGGLES */}
         <form onSubmit={handleSubmit} style={{ marginBottom: '1.5rem' }}>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
             <input
@@ -181,7 +226,13 @@ export default function SearchPage() {
           <aside>
             <CategoryTreeExplorer
               tree={categoryTree}
-              onSelectCategory={(id) => setSelectedCategory(id)}
+              onSelectCategory={(id) => {
+                setSelectedCategory(id);
+                const newParams = new URLSearchParams(searchParams);
+                if (id) newParams.set('category_id', id);
+                else newParams.delete('category_id');
+                setSearchParams(newParams);
+              }}
               selectedId={selectedCategory}
             />
           </aside>
@@ -193,14 +244,22 @@ export default function SearchPage() {
               alignItems: 'center',
               borderBottom: '1px solid #1f1f23',
               paddingBottom: '0.75rem',
-              marginBottom: '1.25rem'
+              marginBottom: '1.25rem',
+              flexWrap: 'wrap',
+              gap: '0.75rem'
             }}>
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {/* FILTER CONTROLS: TABS & CONTRIBUTION PILL */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 {['all', 'articles', 'wikis'].map((tab) => (
                   <button
                     key={tab}
                     type="button"
-                    onClick={() => setActiveTab(tab)}
+                    onClick={() => {
+                      setActiveTab(tab);
+                      const newParams = new URLSearchParams(searchParams);
+                      newParams.set('type', tab);
+                      setSearchParams(newParams);
+                    }}
                     style={{
                       background: 'none',
                       border: 'none',
@@ -216,13 +275,42 @@ export default function SearchPage() {
                     {tab}
                   </button>
                 ))}
+
+                {/* INTERACTIVE CONTRIBUTION TOGGLE PILL */}
+                <button
+                  type="button"
+                  onClick={toggleContributionFilter}
+                  style={{
+                    backgroundColor: needsContribution ? 'rgba(56, 189, 248, 0.18)' : '#141417',
+                    border: needsContribution ? '1px solid rgba(56, 189, 248, 0.6)' : '1px solid #27272a',
+                    color: needsContribution ? '#38bdf8' : '#a1a1aa',
+                    borderRadius: 9999,
+                    padding: '0.3rem 0.75rem',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    marginLeft: '0.5rem',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  <span>📢</span> Seeking Contributions {needsContribution ? '✓' : ''}
+                </button>
               </div>
 
+              {/* SORT DROPDOWN */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <span style={{ fontSize: '0.8rem', color: '#71717a' }}>Sort:</span>
                 <select
                   value={sort}
-                  onChange={(e) => setSort(e.target.value)}
+                  onChange={(e) => {
+                    setSort(e.target.value);
+                    const newParams = new URLSearchParams(searchParams);
+                    newParams.set('sort', e.target.value);
+                    setSearchParams(newParams);
+                  }}
                   className="auth-input"
                   style={{ width: 'auto', padding: '0.3rem 0.6rem', fontSize: '0.8rem', backgroundColor: '#09090b' }}
                 >
@@ -238,8 +326,8 @@ export default function SearchPage() {
               <p style={{ color: '#71717a' }}>Searching indexes...</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {/* WIKIS SECTION (WITH COVERS) */}
-                {['all', 'wikis'].includes(activeTab) && wikis.length > 0 && (
+                {/* WIKIS SECTION (HIDDEN WHEN STRICTLY FILTERING FOR CONTRIBUTIONS) */}
+                {['all', 'wikis'].includes(activeTab) && !needsContribution && wikis.length > 0 && (
                   <div style={{ marginBottom: '1rem' }}>
                     <h3 style={{ fontSize: '0.85rem', color: '#a855f7', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
                       Wiki Spaces ({wikis.length})
@@ -256,7 +344,6 @@ export default function SearchPage() {
                           justifyContent: 'space-between'
                         }}>
                           <div>
-                            {/* Wiki Card Cover */}
                             <div style={{
                               height: 90,
                               width: '100%',
@@ -301,7 +388,7 @@ export default function SearchPage() {
                   </div>
                 )}
 
-                {/* ARTICLES SECTION (WITH THUMBNAILS) */}
+                {/* ARTICLES SECTION */}
                 {['all', 'articles'].includes(activeTab) && (
                   <div>
                     {activeTab === 'all' && (
@@ -312,14 +399,18 @@ export default function SearchPage() {
 
                     {articles.length === 0 && wikis.length === 0 ? (
                       <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '2.5rem', borderRadius: 6, textAlign: 'center' }}>
-                        <p style={{ color: '#71717a', margin: 0 }}>No matching records found. Try adjusting your search or Boolean terms.</p>
+                        <p style={{ color: '#71717a', margin: 0 }}>
+                          {needsContribution
+                            ? 'No articles currently request community contributions in this category.'
+                            : 'No matching records found. Try adjusting your search or Boolean terms.'}
+                        </p>
                       </div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         {articles.map((art) => (
                           <div key={art.article_id} style={{
                             backgroundColor: '#0d0d0f',
-                            border: '1px solid #1f1f23',
+                            border: art.needs_contribution ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid #1f1f23',
                             borderRadius: 8,
                             padding: '1.15rem 1.25rem',
                             display: 'flex',
@@ -352,12 +443,29 @@ export default function SearchPage() {
                             </div>
 
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
-                                <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
-                                  {art.wiki_title}
-                                </Link>{' '}
-                                • {art.category_name || 'General'}
-                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                                <span style={{ fontSize: '0.75rem', color: '#a1a1aa' }}>
+                                  <Link to={`/wiki/${art.wiki_slug}`} style={{ color: '#a855f7', textDecoration: 'none' }}>
+                                    {art.wiki_title}
+                                  </Link>{' '}
+                                  • {art.category_name || 'General'}
+                                </span>
+
+                                {art.needs_contribution && (
+                                  <span style={{
+                                    fontSize: '0.68rem',
+                                    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                                    color: '#38bdf8',
+                                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                                    padding: '0.1rem 0.45rem',
+                                    borderRadius: 9999,
+                                    fontWeight: 600
+                                  }}>
+                                    📢 Contributions Welcome
+                                  </span>
+                                )}
+                              </div>
+
                               <h3 style={{ margin: '0.2rem 0', fontSize: '1.15rem' }}>
                                 <Link to={`/wiki/${art.wiki_slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
                                   {art.title}
@@ -366,7 +474,7 @@ export default function SearchPage() {
 
                               <p
                                 style={{
-                                  margin: '0 0 0.4rem 0',
+                                  margin: '0 0 0.35rem 0',
                                   color: '#a1a1aa',
                                   fontSize: '0.85rem',
                                   lineHeight: 1.45,
@@ -381,6 +489,21 @@ export default function SearchPage() {
                                 }}
                               />
 
+                              {/* AUTHOR GUIDANCE NOTE */}
+                              {art.needs_contribution && art.contribution_message && (
+                                <div style={{
+                                  backgroundColor: 'rgba(56, 189, 248, 0.06)',
+                                  borderLeft: '3px solid #38bdf8',
+                                  padding: '0.35rem 0.65rem',
+                                  borderRadius: '0 4px 4px 0',
+                                  marginBottom: '0.4rem',
+                                  fontSize: '0.78rem',
+                                  color: '#cbd5e1'
+                                }}>
+                                  <strong style={{ color: '#38bdf8' }}>Author Note:</strong> {art.contribution_message}
+                                </div>
+                              )}
+
                               <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
                                 v{art.version_number} • {art.read_count} reads • Edited {new Date(art.last_edited_at).toLocaleDateString()}
                               </span>
@@ -389,9 +512,10 @@ export default function SearchPage() {
                             <Link
                               to={`/wiki/${art.wiki_slug}/${art.slug}`}
                               style={{
-                                backgroundColor: '#18181b',
-                                color: '#fff',
-                                border: '1px solid #27272a',
+                                backgroundColor: art.needs_contribution ? '#38bdf8' : '#18181b',
+                                color: art.needs_contribution ? '#020617' : '#fff',
+                                fontWeight: art.needs_contribution ? 600 : 400,
+                                border: art.needs_contribution ? '1px solid #38bdf8' : '1px solid #27272a',
                                 padding: '0.45rem 0.85rem',
                                 borderRadius: 4,
                                 textDecoration: 'none',
@@ -399,7 +523,7 @@ export default function SearchPage() {
                                 whiteSpace: 'nowrap'
                               }}
                             >
-                              Read →
+                              {art.needs_contribution ? 'Contribute →' : 'Read →'}
                             </Link>
                           </div>
                         ))}

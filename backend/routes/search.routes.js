@@ -24,7 +24,7 @@ router.get('/categories/tree', async (req, res) => {
 
     res.status(200).json({ success: true, tree: categories });
   } catch (error) {
-    console.warn('Category tree with parent_id failed, falling back to flat list:', error.message);
+    console.warn('Category tree failed, falling back:', error.message);
     try {
       const flatCategories = await prisma.$queryRaw`
         SELECT 
@@ -43,13 +43,12 @@ router.get('/categories/tree', async (req, res) => {
       `;
       res.status(200).json({ success: true, tree: flatCategories });
     } catch (fallbackError) {
-      console.error('All category tree queries failed:', fallbackError);
       res.status(500).json({ success: false, message: 'Failed to load category tree' });
     }
   }
 });
 
-// 2. FULL-TEXT SEARCH (Articles & Wiki Spaces)
+// 2. FULL-TEXT SEARCH (With needs_contribution filtering & message extraction)
 router.get('/', async (req, res) => {
   try {
     const {
@@ -60,11 +59,13 @@ router.get('/', async (req, res) => {
       exact = '',
       category_id,
       sort = 'relevance',
-      type = 'all'
+      type = 'all',
+      needs_contribution = 'false'
     } = req.query;
 
     const searchTerm = q.trim();
     const categoryId = category_id ? Number(category_id) : null;
+    const filterSeekingContributions = needs_contribution === 'true' || type === 'contributions';
 
     let categoryIds = null;
     if (categoryId && !isNaN(categoryId)) {
@@ -119,7 +120,8 @@ router.get('/', async (req, res) => {
     let articles = [];
     let wikis = [];
 
-    if (['all', 'articles'].includes(type)) {
+    // Query Articles
+    if (['all', 'articles', 'contributions'].includes(type)) {
       if (tsQueryString) {
         try {
           articles = await prisma.$queryRaw`
@@ -132,6 +134,8 @@ router.get('/', async (req, res) => {
               a.slug,
               COALESCE(a.description, '') AS description,
               a.thumbnail_url,
+              a.needs_contribution,
+              COALESCE(a.contribution_message, '') AS contribution_message,
               a.read_count::INT AS read_count,
               a.created_at,
               w.wiki_id::INT AS wiki_id,
@@ -159,6 +163,7 @@ router.get('/', async (req, res) => {
               LIMIT 1
             ) av ON TRUE
             WHERE a.is_published = TRUE
+              AND (${filterSeekingContributions}::BOOLEAN = FALSE OR a.needs_contribution = TRUE)
               AND (${categoryIds}::INT[] IS NULL OR COALESCE(a.category_id, w.category_id) = ANY(${categoryIds}::INT[]))
               AND (
                 (av.search_vector IS NOT NULL AND av.search_vector @@ pq.query)
@@ -182,6 +187,8 @@ router.get('/', async (req, res) => {
               a.slug,
               COALESCE(a.description, '') AS description,
               a.thumbnail_url,
+              a.needs_contribution,
+              COALESCE(a.contribution_message, '') AS contribution_message,
               COALESCE(NULLIF(a.description, ''), 'No excerpt available.') AS snippet,
               a.read_count::INT AS read_count,
               a.created_at,
@@ -202,6 +209,7 @@ router.get('/', async (req, res) => {
               LIMIT 1
             ) av ON TRUE
             WHERE a.is_published = TRUE
+              AND (${filterSeekingContributions}::BOOLEAN = FALSE OR a.needs_contribution = TRUE)
               AND (${categoryIds}::INT[] IS NULL OR COALESCE(a.category_id, w.category_id) = ANY(${categoryIds}::INT[]))
               AND (
                 a.title ILIKE '%' || ${searchTerm}::TEXT || '%'
@@ -219,6 +227,8 @@ router.get('/', async (req, res) => {
             a.slug,
             COALESCE(a.description, '') AS description,
             a.thumbnail_url,
+            a.needs_contribution,
+            COALESCE(a.contribution_message, '') AS contribution_message,
             COALESCE(NULLIF(a.description, ''), 'No excerpt available.') AS snippet,
             a.read_count::INT AS read_count,
             a.created_at,
@@ -239,6 +249,7 @@ router.get('/', async (req, res) => {
             LIMIT 1
           ) av ON TRUE
           WHERE a.is_published = TRUE
+            AND (${filterSeekingContributions}::BOOLEAN = FALSE OR a.needs_contribution = TRUE)
             AND (${categoryIds}::INT[] IS NULL OR COALESCE(a.category_id, w.category_id) = ANY(${categoryIds}::INT[]))
           ORDER BY 
             CASE WHEN ${sort}::TEXT = 'alpha' THEN a.title END ASC,
@@ -251,7 +262,8 @@ router.get('/', async (req, res) => {
       }
     }
 
-    if (['all', 'wikis'].includes(type)) {
+    // Query Wikis (Exclude wikis if seeking article contributions)
+    if (['all', 'wikis'].includes(type) && !filterSeekingContributions) {
       if (searchTerm) {
         wikis = await prisma.$queryRaw`
           SELECT 
@@ -261,11 +273,7 @@ router.get('/', async (req, res) => {
             COALESCE(w.description, '') AS description,
             COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
             w.total_views::INT AS total_views,
-            (
-              SELECT COUNT(*)::INT 
-              FROM articles a 
-              WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE
-            ) AS article_count
+            (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
           FROM wiki_spaces w
           LEFT JOIN media m ON w.media_id = m.media_id
           WHERE (${categoryIds}::INT[] IS NULL OR w.category_id = ANY(${categoryIds}::INT[]))
@@ -287,11 +295,7 @@ router.get('/', async (req, res) => {
             COALESCE(w.description, '') AS description,
             COALESCE(w.cover_image_url, m.file_url) AS cover_image_url,
             w.total_views::INT AS total_views,
-            (
-              SELECT COUNT(*)::INT 
-              FROM articles a 
-              WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE
-            ) AS article_count
+            (SELECT COUNT(*)::INT FROM articles a WHERE a.wiki_id = w.wiki_id AND a.is_published = TRUE) AS article_count
           FROM wiki_spaces w
           LEFT JOIN media m ON w.media_id = m.media_id
           WHERE (${categoryIds}::INT[] IS NULL OR w.category_id = ANY(${categoryIds}::INT[]))

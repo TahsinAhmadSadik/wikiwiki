@@ -38,6 +38,9 @@ export default function WikiPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // In-wiki instant article search filter
+  const [searchQuery, setSearchQuery] = useState('');
+
   // Cover modal & upload states
   const [isCoverModalOpen, setIsCoverModalOpen] = useState(false);
   const [coverInputUrl, setCoverInputUrl] = useState('');
@@ -186,6 +189,16 @@ export default function WikiPage() {
   const isPrimaryAuthor = wiki.userRole === 'author' || wiki.creator_id === user?.user_id || isGlobal;
   const canDeleteWiki = isGlobal || isPrimaryAuthor;
 
+  // Real-time client filter matching article title or summary
+  const cleanQuery = searchQuery.trim().toLowerCase();
+  const filteredArticles = articles.filter((art) => {
+    if (!cleanQuery) return true;
+    return (
+      art.title?.toLowerCase().includes(cleanQuery) ||
+      (art.description && art.description.toLowerCase().includes(cleanQuery))
+    );
+  });
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
       <Navbar />
@@ -213,7 +226,6 @@ export default function WikiPage() {
               </div>
             )}
 
-            {/* Live Preview Box */}
             {coverInputUrl ? (
               <div style={{
                 height: 140,
@@ -244,7 +256,6 @@ export default function WikiPage() {
               </div>
             )}
 
-            {/* Dual Input Controls: URL + Upload */}
             <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}>
               <input
                 type="text"
@@ -281,7 +292,6 @@ export default function WikiPage() {
               </label>
             </div>
 
-            {/* Modal Actions */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #1f1f23', paddingTop: '1rem' }}>
               {wiki.cover_image_url ? (
                 <button
@@ -405,7 +415,6 @@ export default function WikiPage() {
                 background: 'linear-gradient(to top, #0d0d0f 0%, rgba(13,13,15,0.4) 60%, rgba(13,13,15,0.1) 100%)'
               }} />
 
-              {/* Cover Change Button for Author/Co-Author/Owner/Admin */}
               {isAuthorOrCoAuthor && (
                 <button
                   type="button"
@@ -521,7 +530,6 @@ export default function WikiPage() {
                   + New Article
                 </Link>
 
-                {/* DELETE WIKI SPACE (AUTHOR / ADMIN ONLY) */}
                 {canDeleteWiki && (
                   <button
                     type="button"
@@ -572,9 +580,73 @@ export default function WikiPage() {
           </div>
         </header>
 
-        {/* ARTICLES FEED WITH THUMBNAILS */}
+        {/* ARTICLES FEED WITH INSTANT SEARCH FILTER */}
         <section style={{ marginBottom: '3rem' }}>
-          <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem' }}>Published Articles ({articles.length})</h2>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '1.25rem',
+            gap: '1rem',
+            flexWrap: 'wrap'
+          }}>
+            <h2 style={{ fontSize: '1.25rem', margin: 0, fontWeight: 600 }}>
+              Published Articles ({filteredArticles.length}{cleanQuery ? ` of ${articles.length}` : ''})
+            </h2>
+
+            {/* Search Input Filter */}
+            {articles.length > 0 && (
+              <div style={{ position: 'relative', width: 280, maxWidth: '100%' }}>
+                <span style={{
+                  position: 'absolute',
+                  left: '0.75rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: '#71717a',
+                  fontSize: '0.85rem',
+                  pointerEvents: 'none'
+                }}>
+                  🔍
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search articles in this wiki..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="auth-input"
+                  style={{
+                    padding: '0.45rem 2rem 0.45rem 2.25rem',
+                    fontSize: '0.825rem',
+                    borderRadius: 6,
+                    backgroundColor: '#121215',
+                    borderColor: cleanQuery ? '#a855f7' : '#27272a',
+                    width: '100%'
+                  }}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    style={{
+                      position: 'absolute',
+                      right: '0.65rem',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: '#71717a',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      padding: 0
+                    }}
+                    title="Clear search"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           {articles.length === 0 ? (
             <div style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '2rem', borderRadius: 8, textAlign: 'center' }}>
@@ -583,14 +655,35 @@ export default function WikiPage() {
                 Write the First Article
               </Link>
             </div>
+          ) : filteredArticles.length === 0 ? (
+            <div style={{ backgroundColor: '#0d0d0f', border: '1px dashed #27272a', padding: '2.5rem', borderRadius: 8, textAlign: 'center' }}>
+              <p style={{ color: '#a1a1aa', margin: '0 0 0.75rem 0', fontSize: '0.9rem' }}>
+                No articles matching <strong>"{searchQuery}"</strong> found in this wiki.
+              </p>
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                style={{
+                  background: 'none',
+                  border: '1px solid #3f3f46',
+                  color: '#f4f4f5',
+                  padding: '0.35rem 0.85rem',
+                  borderRadius: 6,
+                  fontSize: '0.8rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Clear Search
+              </button>
+            </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-              {articles.map((art) => (
+              {filteredArticles.map((art) => (
                 <div
                   key={art.article_id}
                   style={{
                     backgroundColor: '#0d0d0f',
-                    border: '1px solid #1f1f23',
+                    border: art.needs_contribution ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid #1f1f23',
                     padding: '1.15rem 1.25rem',
                     borderRadius: 8,
                     display: 'flex',
@@ -623,11 +716,28 @@ export default function WikiPage() {
                   </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.15rem' }}>
-                      <Link to={`/wiki/${wiki.slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
-                        {art.title}
-                      </Link>
-                    </h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.2rem' }}>
+                      <h3 style={{ margin: 0, fontSize: '1.15rem' }}>
+                        <Link to={`/wiki/${wiki.slug}/${art.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                          {art.title}
+                        </Link>
+                      </h3>
+
+                      {art.needs_contribution && (
+                        <span style={{
+                          fontSize: '0.68rem',
+                          backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                          color: '#38bdf8',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          padding: '0.1rem 0.45rem',
+                          borderRadius: 9999,
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap'
+                        }}>
+                          📢 Seeking Edits
+                        </span>
+                      )}
+                    </div>
 
                     <p
                       style={{
@@ -653,9 +763,10 @@ export default function WikiPage() {
                   <Link
                     to={`/wiki/${wiki.slug}/${art.slug}`}
                     style={{
-                      backgroundColor: '#18181b',
-                      color: '#fff',
-                      border: '1px solid #27272a',
+                      backgroundColor: art.needs_contribution ? '#38bdf8' : '#18181b',
+                      color: art.needs_contribution ? '#020617' : '#fff',
+                      fontWeight: art.needs_contribution ? 600 : 400,
+                      border: art.needs_contribution ? '1px solid #38bdf8' : '1px solid #27272a',
                       padding: '0.5rem 0.95rem',
                       borderRadius: 6,
                       textDecoration: 'none',
@@ -663,7 +774,7 @@ export default function WikiPage() {
                       whiteSpace: 'nowrap'
                     }}
                   >
-                    Read →
+                    {art.needs_contribution ? 'Contribute →' : 'Read →'}
                   </Link>
                 </div>
               ))}

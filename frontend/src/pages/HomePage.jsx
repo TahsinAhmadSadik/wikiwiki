@@ -75,6 +75,9 @@ export default function HomePage() {
 
   useEffect(() => {
     const fetchLandingData = async () => {
+      setErrorMsg('');
+
+      // 1. Fetch Global Public Feeds & Analytics
       try {
         const [catRes, velRes, topRes, distributionRes] = await Promise.all([
           api.get('/categories'),
@@ -90,18 +93,45 @@ export default function HomePage() {
         if (catRes.categories?.length > 0) {
           setSelectedCategory(String(catRes.categories[0].category_id));
         }
+      } catch (err) {
+        setErrorMsg(err.data?.message || err.message || 'Failed to load explore feed.');
+      }
 
-        if (user) {
+      // 2. Fetch Personalized Recommendations (Isolated Error Boundary)
+      if (user) {
+        try {
           const forYouRes = await api.get('/home/for-you');
           setForYouArticles(forYouRes.articles || []);
           setFollowedCategories(forYouRes.followedCategories || []);
           setFollowedWikis(forYouRes.followedWikis || []);
+        } catch (forYouErr) {
+          const status = forYouErr.status || forYouErr.response?.status;
+          const msg = (forYouErr.data?.message || forYouErr.message || '').toLowerCase();
+
+          // Suppress banner for benign states (unauthenticated, missing follows, or empty categories)
+          const isBenignState =
+            status === 401 ||
+            status === 403 ||
+            status === 404 ||
+            msg.includes('follow') ||
+            msg.includes('interest') ||
+            msg.includes('auth') ||
+            msg.includes('login') ||
+            msg.includes('token') ||
+            msg.includes('not found') ||
+            msg.includes('unauthorized');
+
+          if (isBenignState) {
+            setForYouArticles([]);
+          } else {
+            setErrorMsg(forYouErr.data?.message || forYouErr.message || 'Failed to load personalized recommendations.');
+          }
         }
-      } catch (err) {
-        setErrorMsg(err.data?.message || err.message || 'Failed to load explore feed.');
-      } finally {
-        setLoading(false);
+      } else {
+        setForYouArticles([]);
       }
+
+      setLoading(false);
     };
 
     fetchLandingData();
@@ -262,7 +292,7 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* 2. MOST READ ARTICLES (4 ARTICLES IN 2 ROWS - FULL CARD LINK) */}
+        {/* 2. MOST READ ARTICLES */}
         <section style={{ marginBottom: '4.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.5rem' }}>
             <h2 style={{ fontSize: '1.45rem', fontWeight: 700, letterSpacing: '-0.02em', margin: 0 }}>
@@ -290,7 +320,6 @@ export default function HomePage() {
                   color: 'inherit'
                 }}
               >
-                {/* Large Cover Banner */}
                 <div style={{ height: 175, width: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#18181b' }}>
                   {art.thumbnail_url ? (
                     <img
@@ -322,7 +351,6 @@ export default function HomePage() {
                   </span>
                 </div>
 
-                {/* Card Content Body */}
                 <div style={{ padding: '1.25rem', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                   <div>
                     <h3 style={{ margin: '0 0 0.5rem 0', fontSize: '1.15rem', fontWeight: 600, lineHeight: 1.4, color: '#f4f4f5' }}>
@@ -340,7 +368,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* 3. FOR YOU (SAME LARGE CARD STYLE WITH UN-AUTH PROMPT) */}
+        {/* 3. FOR YOU */}
         <section style={{ marginBottom: '4.5rem' }}>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 700, letterSpacing: '-0.02em', margin: '0 0 1.5rem 0' }}>
             Recommended For You
@@ -454,7 +482,7 @@ export default function HomePage() {
           )}
         </section>
 
-        {/* 4. TRENDING WIKIS (DISTINCT WIKI CARDS WITH 0-100 RATING) */}
+        {/* 4. TRENDING WIKIS */}
         <section style={{ marginBottom: '4.5rem' }}>
           <h2 style={{ fontSize: '1.45rem', fontWeight: 700, letterSpacing: '-0.02em', margin: '0 0 1.5rem 0' }}>
             Trending Wiki Spaces
@@ -462,16 +490,14 @@ export default function HomePage() {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '1.25rem' }}>
             {velocityWikis.map((wiki) => {
-              // Ensure normalized trending rating is strictly between 0 and 100
               const trendingRating = Math.min(
                 100,
                 Math.max(1, Math.round(((Number(wiki.velocity_score) || 0) / maxVelocity) * 100))
               );
 
               return (
-                <Link to={`/wiki/${wiki.slug}`} style={{ color: '#fff', textDecoration: 'none' }}>
+                <Link to={`/wiki/${wiki.slug}`} key={wiki.wiki_id} style={{ color: '#fff', textDecoration: 'none' }}>
                   <div
-                    key={wiki.wiki_id}
                     className="wiki-card-hover"
                     style={{
                       backgroundColor: '#121215',
@@ -485,7 +511,6 @@ export default function HomePage() {
                     }}
                   >
                     <div>
-                      {/* Wiki Cover */}
                       <div style={{
                         height: 120,
                         width: '100%',
@@ -504,7 +529,7 @@ export default function HomePage() {
 
                       <div style={{ padding: '1rem 1.25rem 0.5rem 1.25rem' }}>
                         <h3 style={{ margin: '0 0 0.35rem 0', fontSize: '1.05rem', fontWeight: 600 }}>
-                            {wiki.title}
+                          {wiki.title}
                         </h3>
                         <p style={{
                           color: '#71717a',
@@ -534,18 +559,17 @@ export default function HomePage() {
                     }}>
                       <span>📚 {wiki.total_articles} Articles</span>
                       <span>👁️ {Number(wiki.total_views).toLocaleString()} Views</span>
-                      
-                        <span style={{
-                          backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                          border: '1px solid rgba(16, 185, 129, 0.3)',
-                          color: '#34d399',
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          padding: '0.2rem 0.55rem',
-                          borderRadius: 6
-                        }}>
-                          ⚡ {trendingRating}
-                        </span>
+                      <span style={{
+                        backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                        border: '1px solid rgba(16, 185, 129, 0.3)',
+                        color: '#34d399',
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        padding: '0.2rem 0.55rem',
+                        borderRadius: 6
+                      }}>
+                        ⚡ {trendingRating}
+                      </span>
                     </div>
                   </div>
                 </Link>
@@ -554,7 +578,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* 5. SITE ANALYTICS (3 TABS: Popular in Topics [Top 1 only], Popular in Time, Readership Distribution) */}
+        {/* 5. SITE ANALYTICS */}
         <section style={{
           backgroundColor: '#121215',
           border: '1px solid #222227',
@@ -562,7 +586,6 @@ export default function HomePage() {
           padding: '1.75rem',
           marginBottom: '3rem'
         }}>
-          {/* Section Header & Tab Controls */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.75rem', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
               <h2 style={{ fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.02em', margin: '0 0 0.2rem 0' }}>
@@ -628,7 +651,7 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* TAB 1: POPULAR IN TOPICS (FILTERED STRICTLY TO TOPMOST #1 ONLY) */}
+          {/* TAB 1: POPULAR IN TOPICS */}
           {statTab === 'cross-topic' && (
             <div>
               <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem', alignItems: 'center' }}>
@@ -661,9 +684,9 @@ export default function HomePage() {
               {crossTopicArticles.filter((art) => Number(art.category_rank) === 1).length === 0 ? (
                 <p style={{ color: '#71717a', margin: 0, fontSize: '0.85rem' }}>No rankings available for this timeframe.</p>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.85rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.85rem' }}>
                   {crossTopicArticles
-                    .filter((art) => Number(art.category_rank) === 1) // Strictly topmost #1 article only
+                    .filter((art) => Number(art.category_rank) === 1)
                     .map((art) => (
                       <div
                         key={art.article_id}
@@ -778,7 +801,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {/* TAB 3: READERSHIP DISTRIBUTION (RECHARTS PIE) */}
+          {/* TAB 3: READERSHIP DISTRIBUTION */}
           {statTab === 'topic-distribution' && (
             <div>
               {topicReadDistribution.length === 0 ? (

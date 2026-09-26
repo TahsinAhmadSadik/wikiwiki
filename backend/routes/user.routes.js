@@ -2,11 +2,12 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma.js';
+import { executeTransaction } from '../lib/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// 1. GET CURRENT USER PROFILE & PREFERENCES
+// 1. GET CURRENT USER PROFILE & PREFERENCES (Includes profile_pic_url)
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const users = await prisma.$queryRaw`
@@ -15,6 +16,7 @@ router.get('/me', authenticateToken, async (req, res) => {
         username,
         email,
         bio,
+        profile_pic_url,
         global_role,
         COALESCE(demerit_points, 0)::INT AS demerit_points,
         is_banned,
@@ -57,21 +59,32 @@ router.get('/me', authenticateToken, async (req, res) => {
   }
 });
 
-// 2. UPDATE PROFILE (Bio only)
+// 2. UPDATE PROFILE (Bio and Profile Picture URL)
 router.patch('/profile', authenticateToken, async (req, res) => {
   try {
-    const { bio } = req.body;
-    const userId = req.user.user_id;
+    const { bio, profile_pic_url } = req.body;
+    const userId = Number(req.user.user_id);
 
     if (bio && bio.length > 500) {
       return res.status(400).json({ success: false, message: 'Bio cannot exceed 500 characters' });
     }
 
+    const currentUser = await prisma.$queryRaw`
+      SELECT bio, profile_pic_url FROM users WHERE user_id = ${userId} LIMIT 1;
+    `;
+    if (currentUser.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const targetBio = bio !== undefined ? bio : currentUser[0].bio;
+    const targetPic = profile_pic_url !== undefined ? (profile_pic_url || null) : currentUser[0].profile_pic_url;
+
     const updated = await prisma.$queryRaw`
       UPDATE users
-      SET bio = ${bio ?? null}
+      SET bio = ${targetBio},
+          profile_pic_url = ${targetPic}
       WHERE user_id = ${userId}
-      RETURNING user_id::INT AS user_id, username, email, bio, global_role;
+      RETURNING user_id::INT AS user_id, username, email, bio, profile_pic_url, global_role;
     `;
 
     res.status(200).json({
@@ -100,15 +113,11 @@ router.post('/change-password', authenticateToken, async (req, res) => {
     }
 
     const users = await prisma.$queryRaw`
-      SELECT password_hash, token_version
-      FROM users
-      WHERE user_id = ${userId}
-      LIMIT 1;
+      SELECT password_hash, token_version FROM users WHERE user_id = ${userId} LIMIT 1;
     `;
 
     const user = users[0];
     const passwordMatches = await bcrypt.compare(current_password, user.password_hash);
-
     if (!passwordMatches) {
       return res.status(400).json({ success: false, message: 'Incorrect current password' });
     }
@@ -117,10 +126,7 @@ router.post('/change-password', authenticateToken, async (req, res) => {
     const nextTokenVersion = user.token_version + 1;
 
     await prisma.$executeRaw`
-      UPDATE users
-      SET password_hash = ${newHash},
-          token_version = ${nextTokenVersion}
-      WHERE user_id = ${userId};
+      UPDATE users SET password_hash = ${newHash}, token_version = ${nextTokenVersion} WHERE user_id = ${userId};
     `;
 
     const newToken = jwt.sign(
@@ -129,23 +135,18 @@ router.post('/change-password', authenticateToken, async (req, res) => {
       { expiresIn: '1h' }
     );
 
-    res.status(200).json({
-      success: true,
-      message: 'Password changed successfully',
-      token: newToken,
-    });
+    res.status(200).json({ success: true, message: 'Password changed successfully', token: newToken });
   } catch (error) {
     console.error('Password change error:', error);
     res.status(500).json({ success: false, message: 'Failed to change password' });
   }
 });
 
-// 4. UNFOLLOW CATEGORY OR WIKI
+// 4. UNFOLLOW
 router.delete('/follows/category/:categoryId', authenticateToken, async (req, res) => {
   try {
     await prisma.$executeRaw`
-      DELETE FROM user_category_follows
-      WHERE user_id = ${req.user.user_id} AND category_id = ${Number(req.params.categoryId)};
+      DELETE FROM user_category_follows WHERE user_id = ${req.user.user_id} AND category_id = ${Number(req.params.categoryId)};
     `;
     res.status(200).json({ success: true, message: 'Category removed' });
   } catch (error) {
@@ -156,8 +157,7 @@ router.delete('/follows/category/:categoryId', authenticateToken, async (req, re
 router.delete('/follows/wiki/:wikiId', authenticateToken, async (req, res) => {
   try {
     await prisma.$executeRaw`
-      DELETE FROM user_wiki_follows
-      WHERE user_id = ${req.user.user_id} AND wiki_id = ${Number(req.params.wikiId)};
+      DELETE FROM user_wiki_follows WHERE user_id = ${req.user.user_id} AND wiki_id = ${Number(req.params.wikiId)};
     `;
     res.status(200).json({ success: true, message: 'Wiki removed' });
   } catch (error) {
@@ -169,47 +169,31 @@ router.delete('/follows/wiki/:wikiId', authenticateToken, async (req, res) => {
 router.delete('/account', authenticateToken, async (req, res) => {
   try {
     const { confirm_email } = req.body;
-    const userId = req.user.user_id;
+    const userId = Number(req.user.user_id);
 
     if (!confirm_email) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Email confirmation is required' 
-      });
+      return res.status(400).json({ success: false, message: 'Email confirmation is required' });
     }
 
     const users = await prisma.$queryRaw`
-      SELECT user_id, email
-      FROM users
-      WHERE user_id = ${userId}
-      LIMIT 1;
+      SELECT user_id, email FROM users WHERE user_id = ${userId} LIMIT 1;
     `;
 
-    if (users.length === 0) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
+    if (users.length === 0) return res.status(404).json({ success: false, message: 'User not found' });
     const user = users[0];
 
     if (user.email.toLowerCase() !== confirm_email.trim().toLowerCase()) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Provided email does not match your account email' 
-      });
+      return res.status(400).json({ success: false, message: 'Provided email does not match your account email' });
     }
 
-    // Clean up follows and resets before deleting the user record
-    await prisma.$transaction([
-      prisma.$executeRaw`DELETE FROM user_category_follows WHERE user_id = ${userId};`,
-      prisma.$executeRaw`DELETE FROM user_wiki_follows WHERE user_id = ${userId};`,
-      prisma.$executeRaw`DELETE FROM password_resets WHERE user_id = ${userId};`,
-      prisma.$executeRaw`DELETE FROM users WHERE user_id = ${userId};`
-    ]);
-
-    res.status(200).json({
-      success: true,
-      message: 'Account successfully deleted'
+    await executeTransaction(async (client) => {
+      await client.query(`DELETE FROM user_category_follows WHERE user_id = $1;`, [userId]);
+      await client.query(`DELETE FROM user_wiki_follows WHERE user_id = $1;`, [userId]);
+      await client.query(`DELETE FROM password_resets WHERE user_id = $1;`, [userId]);
+      await client.query(`DELETE FROM users WHERE user_id = $1;`, [userId]);
     });
+
+    res.status(200).json({ success: true, message: 'Account successfully deleted' });
   } catch (error) {
     console.error('Account deletion error:', error);
     res.status(500).json({ success: false, message: 'Failed to delete account' });

@@ -10,17 +10,29 @@ export default function Navbar() {
   const [pendingCount, setPendingCount] = useState(0);
   const roleBadge = getRoleConfig(user?.global_role);
 
-  useEffect(() => {
-    const checkPending = async () => {
-      try {
-        const res = await api.get('/articles/pending-reviews');
-        setPendingCount(res.pending?.length || 0);
-      } catch {
-        // Suppress errors for guests/unauthorized users
-      }
-    };
-    if (user) checkPending();
-  }, [user, location.pathname]);
+ useEffect(() => {
+  const isAdmin = ['admin', 'owner'].includes(user?.global_role);
+
+  if (!isAdmin) {
+    setPendingCount(0);
+    return;
+  }
+
+  const checkPending = async () => {
+    try {
+      const res = await api.get('/admin/pending-count');
+      setPendingCount(res.total_pending || 0);
+    } catch {
+      setPendingCount(0);
+    }
+  };
+
+  checkPending();
+
+  const interval = setInterval(checkPending, 20000);
+
+  return () => clearInterval(interval);
+}, [user]);
 
   const isActive = (path) => location.pathname === path;
 
@@ -189,42 +201,43 @@ export default function Navbar() {
               Explore
             </Link>
 
-            {user && (
-              <>
-                <Link
-                  to="/studio"
-                  className={`nav-link ${isActive('/studio') ? 'active' : ''}`}
-                >
-                  Studio
-                </Link>
+        {user && (
+  <>
+    <Link
+      to="/studio"
+      className={`nav-link ${isActive('/studio') ? 'active' : ''}`}
+    >
+      Studio
+    </Link>
 
-                <Link
-                  to="/admin"
-                  className={`nav-link ${isActive('/admin') ? 'active' : ''}`}
-                >
-                  Admin Panel
-                  {pendingCount > 0 && (
-                    <span
-                      style={{
-                        backgroundColor: '#f59e0b',
-                        color: '#000',
-                        fontSize: '0.68rem',
-                        fontWeight: 700,
-                        borderRadius: 9999,
-                        padding: '0.1rem 0.45rem',
-                        lineHeight: 1
-                      }}
-                    >
-                      {pendingCount}
-                    </span>
-                  )}
-                </Link>
+    {['admin', 'owner'].includes(user?.global_role) && (
+      <Link
+        to="/admin"
+        className={`nav-link ${isActive('/admin') ? 'active' : ''}`}
+      >
+        Admin Panel
 
-                <Link to="/editor" className="new-article-btn">
-                  <span>+</span> New Article
-                </Link>
-              </>
-            )}
+        {pendingCount > 0 && (
+          <span
+            style={{
+              width: '7px',
+              height: '7px',
+              backgroundColor: '#ef4444',
+              borderRadius: '50%',
+              display: 'inline-block',
+              boxShadow: '0 0 6px rgba(239, 68, 68, 0.7)'
+            }}
+            title={`${pendingCount} pending admin task${pendingCount !== 1 ? 's' : ''}`}
+          />
+        )}
+      </Link>
+    )}
+
+    <Link to="/editor" className="new-article-btn">
+      <span>+</span> New Article
+    </Link>
+  </>
+)}
           </div>
         </div>
 

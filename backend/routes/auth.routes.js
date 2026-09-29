@@ -14,21 +14,56 @@ const router = express.Router();
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  validate: { xForwardedForHeader: false }, // Suppress proxy validation warnings
+  validate: { xForwardedForHeader: false },
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
 
-dns.setDefaultResultOrder('ipv4first');
+// Force all DNS lookups for Gmail/Google hosts to resolve strictly to IPv4 (AF_INET)
+const originalLookup = dns.lookup;
+dns.lookup = (hostname, options, callback) => {
+  let cb = callback;
+  let opts = options;
 
-// Configure Nodemailer with Direct SSL (Port 465) & explicit socket timeouts
+  if (typeof opts === 'function') {
+    cb = opts;
+    opts = {};
+  } else if (typeof opts === 'number') {
+    opts = { family: opts };
+  } else {
+    opts = { ...opts };
+  }
+
+  if (typeof hostname === 'string' && (hostname.includes('gmail') || hostname.includes('google'))) {
+    opts.family = 4;
+    opts.all = false;
+  }
+
+  return originalLookup(hostname, opts, cb);
+};
+
+if (dns.promises && dns.promises.lookup) {
+  const origPromisesLookup = dns.promises.lookup;
+  dns.promises.lookup = (hostname, options) => {
+    let opts = typeof options === 'number' ? { family: options } : { ...options };
+    if (typeof hostname === 'string' && (hostname.includes('gmail') || hostname.includes('google'))) {
+      opts.family = 4;
+      opts.all = false;
+    }
+    return origPromisesLookup(hostname, opts);
+  };
+}
+
+// Configure Nodemailer with Direct SSL (Port 465) and custom IPv4 socket lookup
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 465,
   secure: true,
-  family: 4, // <-- Forces IPv4 connection (bypasses Render IPv6 ENETUNREACH)
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
+  },
+  lookup: (hostname, options, callback) => {
+    dns.lookup(hostname, { ...options, family: 4 }, callback);
   },
   connectionTimeout: 10000,
   greetingTimeout: 10000,
@@ -70,7 +105,6 @@ router.post('/register', authLimiter, async (req, res) => {
       VALUES (${username}, ${email}, ${passwordHash}, ${tokenHash}, ${expiresAt});
     `;
 
-    // Strip brackets, parentheses, and trailing slash from FRONTEND_URL
     const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173')
       .replace(/[\]\)\(\[]/g, '')
       .replace(/\/+$/, '');
@@ -80,7 +114,6 @@ router.post('/register', authLimiter, async (req, res) => {
     console.log(`[VERIFICATION LINK for ${email}]: ${verificationUrl}`);
     console.log('----------------------------------------------------');
 
-    // Send Verification Email non-blocking so SMTP timeouts do not hang the UI
     try {
       await transporter.sendMail({
         from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,

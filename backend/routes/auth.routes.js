@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import dns from 'dns';
 import nodemailer from 'nodemailer';
 import { prisma } from '../lib/prisma.js';
 import { executeTransaction } from '../lib/db.js';
@@ -17,16 +18,19 @@ const authLimiter = rateLimit({
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
 
+dns.setDefaultResultOrder('ipv4first');
+
 // Configure Nodemailer with Direct SSL (Port 465) & explicit socket timeouts
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 465,
-  secure: true, // Use direct SSL (avoids STARTTLS hanging on IPv6 in cloud containers)
+  secure: true,
+  family: 4, // <-- Forces IPv4 connection (bypasses Render IPv6 ENETUNREACH)
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
   },
-  connectionTimeout: 10000, // 10s max socket connection time
+  connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 15000
 });

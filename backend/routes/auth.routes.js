@@ -13,16 +13,22 @@ const router = express.Router();
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  validate: { xForwardedForHeader: false }, // Suppress proxy validation warnings
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
 
-// Configure Nodemailer Transporter with Gmail App Password
+// Configure Nodemailer with Direct SSL (Port 465) & explicit socket timeouts
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true, // Use direct SSL (avoids STARTTLS hanging on IPv6 in cloud containers)
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
-  }
+  },
+  connectionTimeout: 10000, // 10s max socket connection time
+  greetingTimeout: 10000,
+  socketTimeout: 15000
 });
 
 // 1. REGISTER
@@ -60,32 +66,39 @@ router.post('/register', authLimiter, async (req, res) => {
       VALUES (${username}, ${email}, ${passwordHash}, ${tokenHash}, ${expiresAt});
     `;
 
-    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+    // Strip brackets, parentheses, and trailing slash from FRONTEND_URL
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173')
+      .replace(/[\]\)\(\[]/g, '')
+      .replace(/\/+$/, '');
     const verificationUrl = `${frontendBase}/verify-email?token=${rawToken}`;
     
     console.log('----------------------------------------------------');
     console.log(`[VERIFICATION LINK for ${email}]: ${verificationUrl}`);
     console.log('----------------------------------------------------');
 
-    // Send Verification Email via Nodemailer
-    await transporter.sendMail({
-      from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Verify your email to complete registration',
-      html: `
-        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
-          <h2 style="color: #fff; margin-top: 0;">Welcome to WikiWiki!</h2>
-          <p style="color: #a1a1aa; line-height: 1.5;">Please confirm your email address to activate your account and start contributing to our collective knowledge base.</p>
-          <div style="margin: 1.75rem 0;">
-            <a href="${verificationUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
-              Verify & Activate Account
-            </a>
+    // Send Verification Email non-blocking so SMTP timeouts do not hang the UI
+    try {
+      await transporter.sendMail({
+        from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: 'Verify your email to complete registration',
+        html: `
+          <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
+            <h2 style="color: #fff; margin-top: 0;">Welcome to WikiWiki!</h2>
+            <p style="color: #a1a1aa; line-height: 1.5;">Please confirm your email address to activate your account and start contributing to our collective knowledge base.</p>
+            <div style="margin: 1.75rem 0;">
+              <a href="${verificationUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
+                Verify & Activate Account
+              </a>
+            </div>
+            <p style="color: #71717a; font-size: 0.8rem;">This verification link will expire in 24 hours.</p>
+            <p style="color: #52525b; font-size: 0.75rem; word-break: break-all;">If the button doesn't work, copy and paste this link: ${verificationUrl}</p>
           </div>
-          <p style="color: #71717a; font-size: 0.8rem;">This verification link will expire in 24 hours.</p>
-          <p style="color: #52525b; font-size: 0.75rem; word-break: break-all;">If the button doesn't work, copy and paste this link: ${verificationUrl}</p>
-        </div>
-      `
-    });
+        `
+      });
+    } catch (mailErr) {
+      console.error('Nodemailer SMTP dispatch error:', mailErr.message);
+    }
 
     res.status(200).json({
       success: true,
@@ -93,7 +106,7 @@ router.post('/register', authLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error('Registration dispatch error:', error);
-    res.status(500).json({ success: false, message: 'Failed to dispatch verification email' });
+    res.status(500).json({ success: false, message: 'Failed to process registration' });
   }
 });
 
@@ -248,27 +261,32 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
       VALUES (${user.user_id}, ${tokenHash}, ${expiresAt});
     `;
 
-    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173')
+      .replace(/[\]\)\(\[]/g, '')
+      .replace(/\/+$/, '');
     const resetUrl = `${frontendBase}/reset-password?token=${rawToken}`;
 
-    // Send Password Reset via Nodemailer
-    await transporter.sendMail({
-      from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
-      to: user.email,
-      subject: 'Reset your WikiWiki account password',
-      html: `
-        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
-          <h2 style="color: #fff; margin-top: 0;">Password Reset Request</h2>
-          <p style="color: #a1a1aa; line-height: 1.5;">You recently requested to reset the password for your WikiWiki account. Click the button below to proceed:</p>
-          <div style="margin: 1.75rem 0;">
-            <a href="${resetUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
-              Reset Password
-            </a>
+    try {
+      await transporter.sendMail({
+        from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
+        to: user.email,
+        subject: 'Reset your WikiWiki account password',
+        html: `
+          <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
+            <h2 style="color: #fff; margin-top: 0;">Password Reset Request</h2>
+            <p style="color: #a1a1aa; line-height: 1.5;">You recently requested to reset the password for your WikiWiki account. Click the button below to proceed:</p>
+            <div style="margin: 1.75rem 0;">
+              <a href="${resetUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
+                Reset Password
+              </a>
+            </div>
+            <p style="color: #71717a; font-size: 0.8rem;">This link is valid for 15 minutes. If you did not request this, you can safely ignore this email.</p>
           </div>
-          <p style="color: #71717a; font-size: 0.8rem;">This link is valid for 15 minutes. If you did not request this, you can safely ignore this email.</p>
-        </div>
-      `
-    });
+        `
+      });
+    } catch (mailErr) {
+      console.error('Nodemailer password reset dispatch error:', mailErr.message);
+    }
 
     res.status(200).json({
       success: true,

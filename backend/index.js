@@ -23,8 +23,12 @@ import mediaRoutes from './routes/media.routes.js';
 dotenv.config();
 const app = express();
 
+// Trust reverse proxy (Render, Cloudflare) for rate limiting & client IP detection
+app.set('trust proxy', 1);
+
+// Sanitize FRONTEND_URL: strip any brackets, parentheses, or trailing slashes
 const rawFrontendUrl = process.env.FRONTEND_URL || '';
-const cleanFrontendUrl = rawFrontendUrl.replace(/\/+$/, ''); // Strip any trailing slash
+const cleanFrontendUrl = rawFrontendUrl.replace(/[\]\)\(\[]/g, '').replace(/\/+$/, '');
 
 const allowedOrigins = [
   'https://wikiwiki-app.netlify.app',
@@ -36,10 +40,10 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+      // Allow requests with no origin (mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
 
-      // Check if origin matches allowed list or any netlify preview deploy
+      // Check if origin matches allowed list or any netlify preview deployment
       const isAllowed =
         allowedOrigins.includes(origin) ||
         origin.endsWith('.netlify.app');

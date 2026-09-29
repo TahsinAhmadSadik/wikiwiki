@@ -3,8 +3,6 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import dns from 'dns';
-import nodemailer from 'nodemailer';
 import { prisma } from '../lib/prisma.js';
 import { executeTransaction } from '../lib/db.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
@@ -18,57 +16,42 @@ const authLimiter = rateLimit({
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
 
-// Force all DNS lookups for Gmail/Google hosts to resolve strictly to IPv4 (AF_INET)
-const originalLookup = dns.lookup;
-dns.lookup = (hostname, options, callback) => {
-  let cb = callback;
-  let opts = options;
+// Helper: Dispatch Transactional Email via EmailJS HTTPS REST API (Port 443)
+async function sendEmailJSEmail({ toEmail, templateParams, templateIdOverride }) {
+  const serviceId = process.env.EMAILJS_SERVICE_ID;
+  const templateId = templateIdOverride || process.env.EMAILJS_TEMPLATE_ID;
+  const publicKey = process.env.EMAILJS_PUBLIC_KEY;
+  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
 
-  if (typeof opts === 'function') {
-    cb = opts;
-    opts = {};
-  } else if (typeof opts === 'number') {
-    opts = { family: opts };
-  } else {
-    opts = { ...opts };
+  if (!serviceId || !templateId || !publicKey) {
+    console.warn('[EMAIL WARNING] EmailJS credentials missing in environment.');
+    return;
   }
 
-  if (typeof hostname === 'string' && (hostname.includes('gmail') || hostname.includes('google'))) {
-    opts.family = 4;
-    opts.all = false;
+  const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      service_id: serviceId,
+      template_id: templateId,
+      user_id: publicKey,         // EmailJS Public Key
+      accessToken: privateKey,    // EmailJS Private Key
+      template_params: {
+        to_email: toEmail,
+        ...templateParams
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`EmailJS API error (${response.status}): ${errorText}`);
   }
 
-  return originalLookup(hostname, opts, cb);
-};
-
-if (dns.promises && dns.promises.lookup) {
-  const origPromisesLookup = dns.promises.lookup;
-  dns.promises.lookup = (hostname, options) => {
-    let opts = typeof options === 'number' ? { family: options } : { ...options };
-    if (typeof hostname === 'string' && (hostname.includes('gmail') || hostname.includes('google'))) {
-      opts.family = 4;
-      opts.all = false;
-    }
-    return origPromisesLookup(hostname, opts);
-  };
+  console.log(`[EMAIL DISPATCHED] Verification email successfully sent to ${toEmail}`);
 }
-
-// Configure Nodemailer with Direct SSL (Port 465) and custom IPv4 socket lookup
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  },
-  lookup: (hostname, options, callback) => {
-    dns.lookup(hostname, { ...options, family: 4 }, callback);
-  },
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000
-});
 
 // 1. REGISTER
 router.post('/register', authLimiter, async (req, res) => {
@@ -105,6 +88,7 @@ router.post('/register', authLimiter, async (req, res) => {
       VALUES (${username}, ${email}, ${passwordHash}, ${tokenHash}, ${expiresAt});
     `;
 
+    // Construct clean URL (strip accidental markdown brackets or trailing slashes)
     const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173')
       .replace(/[\]\)\(\[]/g, '')
       .replace(/\/+$/, '');
@@ -114,32 +98,21 @@ router.post('/register', authLimiter, async (req, res) => {
     console.log(`[VERIFICATION LINK for ${email}]: ${verificationUrl}`);
     console.log('----------------------------------------------------');
 
+    // Send Verification Email via EmailJS HTTPS API (Non-blocking)
     try {
-      await transporter.sendMail({
-        from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: 'Verify your email to complete registration',
-        html: `
-          <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
-            <h2 style="color: #fff; margin-top: 0;">Welcome to WikiWiki!</h2>
-            <p style="color: #a1a1aa; line-height: 1.5;">Please confirm your email address to activate your account and start contributing to our collective knowledge base.</p>
-            <div style="margin: 1.75rem 0;">
-              <a href="${verificationUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
-                Verify & Activate Account
-              </a>
-            </div>
-            <p style="color: #71717a; font-size: 0.8rem;">This verification link will expire in 24 hours.</p>
-            <p style="color: #52525b; font-size: 0.75rem; word-break: break-all;">If the button doesn't work, copy and paste this link: ${verificationUrl}</p>
-          </div>
-        `
+      await sendEmailJSEmail({
+        toEmail: email,
+        templateParams: {
+          verification_url: verificationUrl
+        }
       });
     } catch (mailErr) {
-      console.error('Nodemailer SMTP dispatch error:', mailErr.message);
+      console.error('[EMAIL DISPATCH FAILED]:', mailErr.message);
     }
 
     res.status(200).json({
       success: true,
-      message: 'Verification email dispatched. Please check your inbox to complete registration. Check the spam folder if it is not found in inbox.'
+      message: 'Verification email dispatched. Please check your inbox (and spam folder) to complete registration.'
     });
   } catch (error) {
     console.error('Registration dispatch error:', error);
@@ -303,26 +276,21 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
       .replace(/\/+$/, '');
     const resetUrl = `${frontendBase}/reset-password?token=${rawToken}`;
 
+    console.log('----------------------------------------------------');
+    console.log(`[PASSWORD RESET LINK for ${user.email}]: ${resetUrl}`);
+    console.log('----------------------------------------------------');
+
+    // Attempt dispatch if a reset template is provided; otherwise keep console log active
     try {
-      await transporter.sendMail({
-        from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
-        to: user.email,
-        subject: 'Reset your WikiWiki account password',
-        html: `
-          <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
-            <h2 style="color: #fff; margin-top: 0;">Password Reset Request</h2>
-            <p style="color: #a1a1aa; line-height: 1.5;">You recently requested to reset the password for your WikiWiki account. Click the button below to proceed:</p>
-            <div style="margin: 1.75rem 0;">
-              <a href="${resetUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
-                Reset Password
-              </a>
-            </div>
-            <p style="color: #71717a; font-size: 0.8rem;">This link is valid for 15 minutes. If you did not request this, you can safely ignore this email.</p>
-          </div>
-        `
+      await sendEmailJSEmail({
+        toEmail: user.email,
+        templateParams: {
+          verification_url: resetUrl
+        },
+        templateIdOverride: process.env.EMAILJS_RESET_TEMPLATE_ID || process.env.EMAILJS_TEMPLATE_ID
       });
     } catch (mailErr) {
-      console.error('Nodemailer password reset dispatch error:', mailErr.message);
+      console.error('[PASSWORD RESET EMAIL FAILED]:', mailErr.message);
     }
 
     res.status(200).json({

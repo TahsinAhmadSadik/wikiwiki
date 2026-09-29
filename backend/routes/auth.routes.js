@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 import { prisma } from '../lib/prisma.js';
 import { executeTransaction } from '../lib/db.js';
 import { authenticateToken, optionalAuth } from '../middleware/auth.js';
@@ -14,6 +14,15 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   message: { success: false, message: 'Too many attempts, please try again later.' }
+});
+
+// Configure Nodemailer Transporter with Gmail App Password
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
 });
 
 // 1. REGISTER
@@ -51,27 +60,36 @@ router.post('/register', authLimiter, async (req, res) => {
       VALUES (${username}, ${email}, ${passwordHash}, ${tokenHash}, ${expiresAt});
     `;
 
-    const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${rawToken}`;
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+    const verificationUrl = `${frontendBase}/verify-email?token=${rawToken}`;
+    
     console.log('----------------------------------------------------');
     console.log(`[VERIFICATION LINK for ${email}]: ${verificationUrl}`);
     console.log('----------------------------------------------------');
 
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: 'Wiki Support <onboarding@resend.dev>',
+    // Send Verification Email via Nodemailer
+    await transporter.sendMail({
+      from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Verify your email to complete registration',
       html: `
-        <h2>Welcome to the Wiki!</h2>
-        <p>Please confirm your email address to complete creating your account.</p>
-        <p><a href="${verificationUrl}">Click here to verify and activate your account</a></p>
-        <p>This link expires in 24 hours.</p>
+        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
+          <h2 style="color: #fff; margin-top: 0;">Welcome to WikiWiki!</h2>
+          <p style="color: #a1a1aa; line-height: 1.5;">Please confirm your email address to activate your account and start contributing to our collective knowledge base.</p>
+          <div style="margin: 1.75rem 0;">
+            <a href="${verificationUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
+              Verify & Activate Account
+            </a>
+          </div>
+          <p style="color: #71717a; font-size: 0.8rem;">This verification link will expire in 24 hours.</p>
+          <p style="color: #52525b; font-size: 0.75rem; word-break: break-all;">If the button doesn't work, copy and paste this link: ${verificationUrl}</p>
+        </div>
       `
     });
 
     res.status(200).json({
       success: true,
-      message: 'Verification email dispatched. Please verify your email to complete registration.'
+      message: 'Verification email dispatched. Please check your inbox to complete registration. Check the spam folder if it is not found in inbox.'
     });
   } catch (error) {
     console.error('Registration dispatch error:', error);
@@ -79,7 +97,7 @@ router.post('/register', authLimiter, async (req, res) => {
   }
 });
 
-// 2. VERIFY EMAIL (Explicitly sets has_onboarded = FALSE)
+// 2. VERIFY EMAIL
 router.post('/verify-email', authLimiter, async (req, res) => {
   try {
     const { token } = req.body;
@@ -110,7 +128,6 @@ router.post('/verify-email', authLimiter, async (req, res) => {
       return res.status(409).json({ success: false, message: 'Username or email is already registered.' });
     }
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       await client.query(
         `INSERT INTO users (username, email, password_hash, global_role, has_onboarded)
@@ -134,7 +151,7 @@ router.post('/verify-email', authLimiter, async (req, res) => {
   }
 });
 
-// 3. LOGIN (Guarantees boolean has_onboarded state)
+// 3. LOGIN
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -231,16 +248,25 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
       VALUES (${user.user_id}, ${tokenHash}, ${expiresAt});
     `;
 
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${rawToken}`;
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: 'Wiki Support <onboarding@resend.dev>',
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, '');
+    const resetUrl = `${frontendBase}/reset-password?token=${rawToken}`;
+
+    // Send Password Reset via Nodemailer
+    await transporter.sendMail({
+      from: `"WikiWiki Support" <${process.env.EMAIL_USER}>`,
       to: user.email,
-      subject: 'Reset your Wiki account password',
+      subject: 'Reset your WikiWiki account password',
       html: `
-        <p>You requested a password reset for your Wiki account.</p>
-        <p><a href="${resetUrl}">Click here to reset your password</a></p>
-        <p>This link expires in 15 minutes.</p>
+        <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; padding: 1.5rem; background: #0d0d0f; color: #f4f4f5; border-radius: 8px; border: 1px solid #27272a;">
+          <h2 style="color: #fff; margin-top: 0;">Password Reset Request</h2>
+          <p style="color: #a1a1aa; line-height: 1.5;">You recently requested to reset the password for your WikiWiki account. Click the button below to proceed:</p>
+          <div style="margin: 1.75rem 0;">
+            <a href="${resetUrl}" style="background-color: #a855f7; color: #ffffff; text-decoration: none; padding: 0.65rem 1.25rem; border-radius: 6px; font-weight: 600; display: inline-block;">
+              Reset Password
+            </a>
+          </div>
+          <p style="color: #71717a; font-size: 0.8rem;">This link is valid for 15 minutes. If you did not request this, you can safely ignore this email.</p>
+        </div>
       `
     });
 
@@ -299,7 +325,7 @@ router.post('/reset-password', authLimiter, async (req, res) => {
   }
 });
 
-// 7. GET ONBOARDING DATA (Permissive Auth & Clean Int Casting)
+// 7. GET ONBOARDING DATA
 router.get('/onboarding-data', optionalAuth, async (req, res) => {
   try {
     const categories = await prisma.$queryRaw`

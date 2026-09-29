@@ -109,7 +109,12 @@ export default function ArticlePage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [rollingBack, setRollingBack] = useState(false);
 
-  // Custom Modal States (Replacing browser alerts & confirms)
+  // Rollback Trigger Audit Log Modal States (Author/Admin Only)
+  const [isLogsModalOpen, setIsLogsModalOpen] = useState(false);
+  const [rollbackLogs, setRollbackLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
+  // Custom Confirmation & Alert Modal States
   const [versionToRollback, setVersionToRollback] = useState(null);
   const [isRollbackConfirmOpen, setIsRollbackConfirmOpen] = useState(false);
   const [alertModalState, setAlertModalState] = useState({
@@ -118,6 +123,11 @@ export default function ArticlePage() {
     message: '',
     isError: false
   });
+
+  // Contribution Management Modal
+  const [isContribModalOpen, setIsContribModalOpen] = useState(false);
+  const [contribMessageInput, setContribMessageInput] = useState('');
+  const [savingContrib, setSavingContrib] = useState(false);
 
   // Report modal states
   const [isReportOpen, setIsReportOpen] = useState(false);
@@ -146,6 +156,9 @@ export default function ArticlePage() {
       const res = await api.get(url);
       setData(res);
       setSimilarArticles(res.similarArticles || []);
+      if (res.article) {
+        setContribMessageInput(res.article.contribution_message || '');
+      }
     } catch (err) {
       setError(err.data?.message || err.message);
     } finally {
@@ -176,14 +189,32 @@ export default function ArticlePage() {
     }
   };
 
-  // Trigger modal confirmation
+  // Fetch trigger-generated shadow audit logs from database
+  const loadRollbackLogs = async () => {
+    if (!data?.article?.article_id) return;
+    setLoadingLogs(true);
+    try {
+      const res = await api.get(`/articles/${data.article.article_id}/rollback-logs`);
+      setRollbackLogs(res.logs || []);
+      setIsLogsModalOpen(true);
+    } catch (err) {
+      setAlertModalState({
+        isOpen: true,
+        title: 'Error',
+        message: err.data?.message || err.message || 'Failed to load rollback audit logs.',
+        isError: true
+      });
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
   const handlePromptRollback = (ver) => {
     setIsHistoryOpen(false);
     setVersionToRollback(ver);
     setIsRollbackConfirmOpen(true);
   };
 
-  // Execute restore and refresh the page data
   const handleConfirmRollback = async () => {
     if (!versionToRollback) return;
     setRollingBack(true);
@@ -195,14 +226,11 @@ export default function ArticlePage() {
       setIsRollbackConfirmOpen(false);
       setIsHistoryOpen(false);
 
-      // Clear ?v= from URL
       navigate(`/wiki/${wikiSlug}/${articleSlug}`, { replace: true });
-
-      // Immediately fetch live article data so UI refreshes without manual reload
       await fetchArticle(null);
 
       setLockStatusMsg(res.message || `Successfully restored Version ${versionToRollback.version_number}`);
-      setTimeout(() => setLockStatusMsg(''), 4000);
+      setTimeout(() => setLockStatusMsg(''), 4500);
       setVersionToRollback(null);
     } catch (err) {
       setAlertModalState({
@@ -213,6 +241,38 @@ export default function ArticlePage() {
       });
     } finally {
       setRollingBack(false);
+    }
+  };
+
+  const handleSaveContributionStatus = async (enable) => {
+    setSavingContrib(true);
+    try {
+      const res = await api.patch(`/articles/${data.article.article_id}/contribution`, {
+        needs_contribution: enable,
+        contribution_message: contribMessageInput
+      });
+
+      setData((prev) => ({
+        ...prev,
+        article: {
+          ...prev.article,
+          needs_contribution: res.needs_contribution,
+          contribution_message: res.contribution_message
+        }
+      }));
+
+      setIsContribModalOpen(false);
+      setLockStatusMsg(res.message);
+      setTimeout(() => setLockStatusMsg(''), 4000);
+    } catch (err) {
+      setAlertModalState({
+        isOpen: true,
+        title: 'Action Failed',
+        message: err.data?.message || err.message || 'Failed to update contribution status.',
+        isError: true
+      });
+    } finally {
+      setSavingContrib(false);
     }
   };
 
@@ -327,6 +387,7 @@ export default function ArticlePage() {
   const isAuthorOrCoAuthor = ['author', 'co_author'].includes(article.userRole);
   const canManageArticle = isGlobal || isAuthorOrCoAuthor;
   const canEdit = !article.is_locked || canManageArticle;
+  const isSeekingContribution = Boolean(article.needs_contribution);
 
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#000', color: '#f4f4f5' }}>
@@ -365,7 +426,7 @@ export default function ArticlePage() {
             </h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
               Are you sure you want to restore <strong>Version {versionToRollback.version_number}</strong> as the active published revision?
-              This will update the live article, metadata excerpts, and referenced knowledge links.
+              This action will be automatically recorded in the database rollback audit shadow table via trigger.
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -409,7 +470,226 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 3. HISTORICAL VERSION ARCHIVE BANNER */}
+      {/* 3. ROLLBACK TRIGGER AUDIT LOG MODAL (AUTHOR / ADMIN ONLY) */}
+      {isLogsModalOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 660, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '0.85rem', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>🛡️</span> Rollback Audit Trail
+                </h3>
+                <span style={{ fontSize: '0.78rem', color: '#71717a' }}>
+                  Auto-generated via database trigger (<code>trg_article_versions_rollback</code>) • Read Only
+                </span>
+              </div>
+              <button
+                onClick={() => setIsLogsModalOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#71717a', cursor: 'pointer', fontSize: '1.25rem' }}
+              >
+                ✕
+              </button>
+            </header>
+
+            <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+              {rollbackLogs.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#71717a' }}>
+                  <p style={{ margin: 0, fontSize: '0.9rem' }}>No rollback operations have been logged for this article yet.</p>
+                </div>
+              ) : (
+                rollbackLogs.map((log) => {
+                  const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(log.user_name || 'System')}`;
+                  const avatarSrc = log.user_pic || fallbackAvatar;
+
+                  return (
+                    <div
+                      key={log.log_id}
+                      style={{
+                        backgroundColor: '#121215',
+                        border: '1px solid #27272a',
+                        padding: '0.9rem 1.15rem',
+                        borderRadius: 8,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        {/* Transition Version Badge */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{
+                            backgroundColor: 'rgba(234, 179, 8, 0.15)',
+                            color: '#eab308',
+                            border: '1px solid rgba(234, 179, 8, 0.35)',
+                            padding: '0.2rem 0.6rem',
+                            borderRadius: 6,
+                            fontSize: '0.8rem',
+                            fontWeight: 700
+                          }}>
+                            Version {log.prev_version} ➔ Version {log.new_version}
+                          </span>
+                          <span style={{ fontSize: '0.72rem', color: '#71717a' }}>
+                            Log Entry #{log.log_id}
+                          </span>
+                        </div>
+
+                        {/* Timestamp */}
+                        <span style={{ fontSize: '0.75rem', color: '#71717a' }}>
+                          {new Date(log.created_at).toLocaleString()}
+                        </span>
+                      </div>
+
+                      {/* Actor Information & Trigger Context */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', borderTop: '1px solid #1a1a1e', paddingTop: '0.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <img
+                            src={avatarSrc}
+                            alt={log.user_name}
+                            style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover', backgroundColor: '#18181b' }}
+                            onError={(e) => { e.currentTarget.src = fallbackAvatar; }}
+                          />
+                          <span style={{ fontSize: '0.8rem', color: '#d4d4d8' }}>
+                            Executed by <strong>{log.user_name}</strong>
+                          </span>
+                        </div>
+
+                        {log.report_id ? (
+                          <span style={{
+                            fontSize: '0.75rem',
+                            color: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 4
+                          }}>
+                            🚩 Moderation Report #{log.report_id} {log.report_reason ? `("${log.report_reason.slice(0, 30)}...")` : ''}
+                          </span>
+                        ) : (
+                          <span style={{
+                            fontSize: '0.75rem',
+                            color: '#38bdf8',
+                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                            border: '1px solid rgba(56, 189, 248, 0.25)',
+                            padding: '0.15rem 0.5rem',
+                            borderRadius: 4
+                          }}>
+                            👤 Direct Author/Admin Rollback
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <footer style={{ borderTop: '1px solid #1f1f23', paddingTop: '0.75rem', marginTop: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.72rem', color: '#52525b' }}>
+                🔒 Immutable database shadow table record
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsLogsModalOpen(false)}
+                className="auth-btn"
+                style={{ width: 'auto', padding: '0.4rem 1rem', fontSize: '0.8rem' }}
+              >
+                Close
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* 4. CONTRIBUTION MANAGEMENT MODAL */}
+      {isContribModalOpen && (
+        <div className="delete-modal-overlay">
+          <div className="delete-modal-card" style={{ maxWidth: 520 }}>
+            <header style={{ marginBottom: '1rem' }}>
+              <h3 style={{ margin: '0 0 0.4rem 0', fontSize: '1.25rem', color: isSeekingContribution ? '#38bdf8' : '#fff' }}>
+                {isSeekingContribution ? '📢 Manage Contribution Request' : '📢 Request Community Contributions'}
+              </h3>
+              <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.45, margin: 0 }}>
+                {isSeekingContribution
+                  ? 'This article is currently marked for community edits. You can update the guidance message or remove the request.'
+                  : 'Highlight this article in the community directory so contributors can find and help improve it.'}
+              </p>
+            </header>
+
+            <div style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', fontSize: '0.78rem', color: '#d4d4d8', marginBottom: '0.4rem', fontWeight: 600 }}>
+                Guidance Note for Contributors (Optional)
+              </label>
+              <textarea
+                rows={3}
+                className="auth-input"
+                style={{ width: '100%', resize: 'vertical', fontSize: '0.85rem' }}
+                placeholder="e.g., Needs citations for Section 2, additional diagrams, or peer review..."
+                value={contribMessageInput}
+                onChange={(e) => setContribMessageInput(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              {isSeekingContribution ? (
+                <button
+                  type="button"
+                  disabled={savingContrib}
+                  onClick={() => handleSaveContributionStatus(false)}
+                  style={{
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    color: '#ef4444',
+                    borderRadius: 6,
+                    padding: '0.45rem 0.9rem',
+                    fontSize: '0.8125rem',
+                    fontWeight: 500,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {savingContrib ? 'Processing...' : 'Remove Request'}
+                </button>
+              ) : <div />}
+
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  disabled={savingContrib}
+                  onClick={() => setIsContribModalOpen(false)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid #27272a',
+                    color: '#a1a1aa',
+                    borderRadius: 6,
+                    padding: '0.45rem 0.85rem',
+                    fontSize: '0.8125rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingContrib}
+                  onClick={() => handleSaveContributionStatus(true)}
+                  className="auth-btn"
+                  style={{
+                    width: 'auto',
+                    backgroundColor: '#38bdf8',
+                    borderColor: '#38bdf8',
+                    color: '#020617',
+                    fontWeight: 600,
+                    padding: '0.45rem 1.15rem'
+                  }}
+                >
+                  {savingContrib ? 'Saving...' : (isSeekingContribution ? 'Update Note' : 'Confirm & Request')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5. HISTORICAL VERSION ARCHIVE BANNER */}
       {isViewingHistorical && (
         <div style={{
           backgroundColor: '#18181b',
@@ -467,7 +747,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 4. VERSION HISTORY MODAL */}
+      {/* 6. VERSION HISTORY MODAL */}
       {isHistoryOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 620, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
@@ -560,7 +840,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 5. CONFIRM DELETE MODAL */}
+      {/* 7. CONFIRM DELETE MODAL */}
       {isDeleteModalOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 460 }}>
@@ -568,7 +848,7 @@ export default function ArticlePage() {
               Delete Article Permanently?
             </h3>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', lineHeight: 1.5, margin: '0 0 1.25rem 0' }}>
-              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, and bookmarked list entries[cite: 22].
+              Are you sure you want to delete <strong>"{article.title}"</strong>? This will permanently remove all revision histories, link dependencies, moderation reports, rollback audit logs, and bookmarked list entries[cite: 22].
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
@@ -602,7 +882,7 @@ export default function ArticlePage() {
         </div>
       )}
 
-      {/* 6. REPORT MODAL */}
+      {/* 8. REPORT MODAL */}
       {isReportOpen && (
         <div className="delete-modal-overlay">
           <div className="delete-modal-card" style={{ maxWidth: 480 }}>
@@ -663,6 +943,54 @@ export default function ArticlePage() {
           </div>
         )}
 
+        {/* COMMUNITY CONTRIBUTIONS BANNER */}
+        {isSeekingContribution && (
+          <aside style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: 'rgba(56, 189, 248, 0.08)',
+            border: '1px solid rgba(56, 189, 248, 0.35)',
+            borderRadius: 8,
+            padding: '0.9rem 1.25rem',
+            marginBottom: '1.75rem',
+            gap: '1rem',
+            flexWrap: 'wrap',
+            boxShadow: '0 4px 20px rgba(56, 189, 248, 0.06)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
+              <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>💡</span>
+              <div>
+                <h4 style={{ margin: 0, fontSize: '0.92rem', color: '#38bdf8', fontWeight: 600 }}>
+                  Community Contributions Requested
+                </h4>
+                <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.825rem', color: '#cbd5e1', lineHeight: 1.45 }}>
+                  {article.contribution_message || 'Authors have invited community improvements, citations, or section extensions for this article.'}
+                </p>
+              </div>
+            </div>
+
+            {canEdit && (
+              <Link
+                to={`/editor?articleId=${article.article_id}`}
+                style={{
+                  backgroundColor: '#38bdf8',
+                  color: '#020617',
+                  padding: '0.4rem 0.95rem',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: '0.8rem',
+                  textDecoration: 'none',
+                  whiteSpace: 'nowrap',
+                  boxShadow: '0 2px 8px rgba(56, 189, 248, 0.25)'
+                }}
+              >
+                Contribute Now ✏️
+              </Link>
+            )}
+          </aside>
+        )}
+
         <header style={{ borderBottom: '1px solid #1f1f23', paddingBottom: '1.25rem', marginBottom: '2rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
             <div>
@@ -677,6 +1005,7 @@ export default function ArticlePage() {
                   </span>
                 )}
               </span>
+
               <h1 style={{ fontSize: '2.25rem', fontWeight: 700, margin: '0.5rem 0' }}>{article.title}</h1>
             </div>
 
@@ -700,60 +1029,70 @@ export default function ArticlePage() {
                 🕒 History (v{latestVersion?.version_number})
               </button>
 
+              {/* HIDDEN ROLLBACK AUDIT LOG BUTTON (AUTHORS/ADMINS ONLY) */}
               {canManageArticle && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleToggleLock}
-                    style={{
-                      background: article.is_locked ? 'rgba(239, 68, 68, 0.15)' : '#18181b',
-                      border: article.is_locked ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid #27272a',
-                      color: article.is_locked ? '#ef4444' : '#a1a1aa',
-                      borderRadius: 6,
-                      padding: '0.5rem 0.75rem',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem'
-                    }}
-                    title={article.is_locked ? 'Unlock Article' : 'Lock Article'}
-                  >
-                    {article.is_locked ? '🔒 Locked' : '🔓 Lock'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsDeleteModalOpen(true)}
-                    style={{
-                      background: 'none',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      color: '#ef4444',
-                      borderRadius: 6,
-                      padding: '0.5rem 0.75rem',
-                      cursor: 'pointer',
-                      fontSize: '0.85rem'
-                    }}
-                    title="Delete Article"
-                  >
-                    🗑️
-                  </button>
-                </>
-              )}
-
-              {user && (
                 <button
                   type="button"
-                  onClick={() => setIsReportOpen(true)}
+                  onClick={loadRollbackLogs}
+                  disabled={loadingLogs}
                   style={{
-                    background: 'none',
+                    backgroundColor: '#18181b',
                     border: '1px solid #27272a',
-                    color: '#71717a',
+                    color: '#f4f4f5',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.85rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="View auto-generated database trigger rollback log"
+                >
+                  {loadingLogs ? 'Loading...' : '🛡️ Audit Log'}
+                </button>
+              )}
+
+              {/* TOGGLE / MANAGE CONTRIBUTION REQUEST BUTTON */}
+              {canManageArticle && (
+                <button
+                  type="button"
+                  onClick={() => setIsContribModalOpen(true)}
+                  style={{
+                    backgroundColor: isSeekingContribution ? 'rgba(56, 189, 248, 0.18)' : '#18181b',
+                    border: isSeekingContribution ? '1px solid rgba(56, 189, 248, 0.6)' : '1px solid #27272a',
+                    color: isSeekingContribution ? '#38bdf8' : '#a1a1aa',
+                    boxShadow: isSeekingContribution ? '0 0 14px rgba(56, 189, 248, 0.2)' : 'none',
+                    fontWeight: isSeekingContribution ? 600 : 500,
+                    borderRadius: 6,
+                    padding: '0.5rem 0.85rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    transition: 'all 0.2s ease',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem'
+                  }}
+                  title={isSeekingContribution ? 'Article is currently seeking edits. Click to manage note or remove.' : 'Request community edits for this article.'}
+                >
+                  <span>📢</span>
+                  <span>{isSeekingContribution ? 'Seeking Edits (Active)' : 'Mark for Edit'}</span>
+                </button>
+              )}
+
+              {canManageArticle && (
+                <button
+                  type="button"
+                  onClick={handleToggleLock}
+                  style={{
+                    background: article.is_locked ? 'rgba(239, 68, 68, 0.15)' : '#18181b',
+                    border: article.is_locked ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid #27272a',
+                    color: article.is_locked ? '#ef4444' : '#a1a1aa',
                     borderRadius: 6,
                     padding: '0.5rem 0.75rem',
                     cursor: 'pointer',
                     fontSize: '0.85rem'
                   }}
-                  title="Report Article"
+                  title={article.is_locked ? 'Unlock Article' : 'Lock Article'}
                 >
-                  🚩
+                  {article.is_locked ? '🔒 Locked' : '🔓 Lock'}
                 </button>
               )}
 
@@ -848,6 +1187,44 @@ export default function ArticlePage() {
                 </div>
               )}
 
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => setIsReportOpen(true)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid #27272a',
+                    color: '#71717a',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="Report Article"
+                >
+                  🚩
+                </button>
+              )}
+
+              {canManageArticle && (
+                <button
+                  type="button"
+                  onClick={() => setIsDeleteModalOpen(true)}
+                  style={{
+                    background: 'none',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#ef4444',
+                    borderRadius: 6,
+                    padding: '0.5rem 0.75rem',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem'
+                  }}
+                  title="Delete Article"
+                >
+                  🗑️
+                </button>
+              )}
+
               {/* EDIT / CONTRIBUTE */}
               {!user ? (
                 <Link
@@ -885,7 +1262,7 @@ export default function ArticlePage() {
                     textDecoration: 'none'
                   }}
                 >
-                  ✏️ Contribute / Edit
+                  ✏️ Contribute
                 </Link>
               ) : (
                 <span style={{

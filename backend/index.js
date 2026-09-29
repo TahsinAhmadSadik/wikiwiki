@@ -23,14 +23,41 @@ import mediaRoutes from './routes/media.routes.js';
 dotenv.config();
 const app = express();
 
+// Trust reverse proxy (Render, Cloudflare) for rate limiting & client IP detection
+app.set('trust proxy', 1);
+
+// Sanitize FRONTEND_URL: strip any brackets, parentheses, or trailing slashes
+const rawFrontendUrl = process.env.FRONTEND_URL || '';
+const cleanFrontendUrl = rawFrontendUrl.replace(/[\]\)\(\[]/g, '').replace(/\/+$/, '');
+
+const allowedOrigins = [
+  'https://wikiwiki-app.netlify.app',
+  cleanFrontendUrl,
+  'http://localhost:5173',
+  'http://localhost:3000'
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: [
-      process.env.FRONTEND_URL || 'http://localhost:5173',
-      'http://localhost:5173',
-      'http://localhost:3000'
-    ],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, server-to-server)
+      if (!origin) return callback(null, true);
+
+      // Check if origin matches allowed list or any netlify preview deployment
+      const isAllowed =
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.netlify.app');
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.warn(`[CORS Blocked]: ${origin}`);
+        callback(new Error(`CORS blocked for origin: ${origin}`));
+      }
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
   })
 );
 

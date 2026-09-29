@@ -18,6 +18,9 @@ export default function LibraryPage() {
   const [newCollectionTitle, setNewCollectionTitle] = useState('');
   const [creatingList, setCreatingList] = useState(false);
 
+  const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(user?.username || 'WikiUser')}`;
+  const avatarSrc = user?.profile_pic_url || fallbackAvatar;
+
   const fetchLibrary = async () => {
     if (!user) {
       setLoading(false);
@@ -93,11 +96,32 @@ export default function LibraryPage() {
       <Navbar />
 
       <main style={{ maxWidth: 1000, margin: '2rem auto', padding: '0 1.5rem' }}>
-        <header style={{ marginBottom: '2rem' }}>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>Studio Library</h1>
-          <p style={{ color: '#a1a1aa', margin: 0, fontSize: '0.9rem' }}>
-            Manage your published articles, drafts, moderation reports, and bookmarked reading lists.
-          </p>
+        {/* STUDIO HEADER WITH AVATAR */}
+        <header style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '1.25rem' }}>
+          {user && (
+            <img
+              src={avatarSrc}
+              alt={user.username}
+              style={{
+                width: 58,
+                height: 58,
+                borderRadius: '50%',
+                objectFit: 'cover',
+                backgroundColor: '#141417',
+                border: '2px solid rgba(168, 85, 247, 0.45)',
+                boxShadow: '0 4px 16px rgba(168, 85, 247, 0.15)',
+                flexShrink: 0
+              }}
+              onError={(e) => { e.currentTarget.src = fallbackAvatar; }}
+            />
+          )}
+
+          <div>
+            <h1 style={{ fontSize: '1.75rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>{user.username}'s Library</h1>
+            <p style={{ color: '#a1a1aa', margin: 0, fontSize: '0.9rem' }}>
+              Manage your authored articles, pending reviews, moderation standing, and reading lists.
+            </p>
+          </div>
         </header>
 
         {errorMsg && (
@@ -192,7 +216,7 @@ export default function LibraryPage() {
               </button>
             </div>
 
-            {/* TAB 1: PUBLISHED ARTICLES (WITH THUMBNAILS) */}
+            {/* TAB 1: PUBLISHED ARTICLES */}
             {tab === 'published' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 {data.published.length === 0 ? (
@@ -211,7 +235,6 @@ export default function LibraryPage() {
                         gap: '1.25rem'
                       }}
                     >
-                      {/* Thumbnail Preview */}
                       <div style={{
                         width: 75,
                         height: 75,
@@ -316,7 +339,7 @@ export default function LibraryPage() {
               </div>
             )}
 
-            {/* TAB 3: ARTICLE REPORTS & MODERATION */}
+            {/* TAB 3: ARTICLE REPORTS */}
             {tab === 'reports' && (
               <div>
                 <div style={{

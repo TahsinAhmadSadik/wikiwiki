@@ -35,6 +35,11 @@ export default function Navbar() {
 }, [user]);
 
   const isActive = (path) => location.pathname === path;
+  const isContributeActive = location.pathname === '/search' && location.search.includes('needs_contribution=true');
+
+  // Gender-neutral DiceBear bot avatar fallback
+  const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(user?.username || 'WikiUser')}`;
+  const avatarSrc = user?.profile_pic_url || fallbackAvatar;
 
   return (
     <>
@@ -79,6 +84,13 @@ export default function Navbar() {
           background: rgba(255, 255, 255, 0.07);
         }
 
+        .nav-link.contribute-active {
+          color: #38bdf8;
+          font-weight: 600;
+          background: rgba(56, 189, 248, 0.12);
+          border: 1px solid rgba(56, 189, 248, 0.25);
+        }
+
         .nav-icon-btn {
           position: relative;
           display: flex;
@@ -105,12 +117,14 @@ export default function Navbar() {
         .user-highlight-pill {
           display: flex;
           align-items: center;
-          gap: 0.6rem;
-          padding: 0.3rem 0.75rem 0.3rem 0.35rem;
+          gap: 0.55rem;
+          padding: 0.25rem 0.85rem 0.25rem 0.35rem;
           background: linear-gradient(135deg, rgba(168, 85, 247, 0.12), rgba(99, 102, 241, 0.08));
           border: 1px solid rgba(168, 85, 247, 0.3);
           border-radius: 9999px;
+          text-decoration: none;
           transition: all 0.2s ease;
+          cursor: pointer;
         }
 
         .user-highlight-pill:hover {
@@ -119,18 +133,15 @@ export default function Navbar() {
           transform: translateY(-1px);
         }
 
-        .user-avatar-initial {
-          width: 26px;
-          height: 26px;
+        .user-avatar-image {
+          width: 28px;
+          height: 28px;
           border-radius: 50%;
-          background: linear-gradient(135deg, #a855f7, #6366f1);
-          color: #fff;
-          font-size: 0.75rem;
-          font-weight: 700;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+          object-fit: cover;
+          background: #18181b;
+          border: 1px solid rgba(168, 85, 247, 0.4);
           box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+          display: block;
         }
 
         .logo-hover-effect {
@@ -187,7 +198,8 @@ export default function Navbar() {
               className="logo-hover-effect"
               style={{
                 width: 24,
-                height: 24
+                height: 24,
+                display: 'block'
               }}
             />
             <span>WikiWiki</span>
@@ -201,14 +213,23 @@ export default function Navbar() {
               Explore
             </Link>
 
-        {user && (
-  <>
-    <Link
-      to="/studio"
-      className={`nav-link ${isActive('/studio') ? 'active' : ''}`}
-    >
-      Studio
-    </Link>
+            {/* DIRECT CONTRIBUTION EXPLORER LINK */}
+            <Link
+              to="/search?needs_contribution=true"
+              className={`nav-link ${isContributeActive ? 'contribute-active' : ''}`}
+              title="Browse articles where authors are seeking community contributions"
+            >
+              <span>📢</span> Contribute
+            </Link>
+
+            {user && (
+              <>
+                <Link
+                  to="/studio"
+                  className={`nav-link ${isActive('/studio') ? 'active' : ''}`}
+                >
+                  Studio
+                </Link>
 
     {['admin', 'owner'].includes(user?.global_role) && (
       <Link
@@ -243,12 +264,12 @@ export default function Navbar() {
 
         {/* RIGHT: SEARCH, USERNAME, SETTINGS & AUTH */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {/* 1. SEARCH ICON BUTTON */}
+          {/* SEARCH ICON */}
           <Link
             to="/search"
             className="nav-icon-btn"
             title="Search Articles & Wikis"
-            style={{ borderColor: isActive('/search') ? '#a855f7' : '#27272a' }}
+            style={{ borderColor: isActive('/search') && !isContributeActive ? '#a855f7' : '#27272a' }}
           >
             <svg
               width="17"
@@ -267,11 +288,14 @@ export default function Navbar() {
 
           {user ? (
             <>
-              {/* 2. HIGHLIGHTED USERNAME PILL */}
-              <div className="user-highlight-pill">
-                <div className="user-avatar-initial">
-                  {user.username ? user.username.charAt(0).toUpperCase() : 'U'}
-                </div>
+              {/* USERNAME & AVATAR PILL */}
+              <Link to="/settings" className="user-highlight-pill" title="Edit Profile & Avatar">
+                <img
+                  src={avatarSrc}
+                  alt={user.username}
+                  className="user-avatar-image"
+                  onError={(e) => { e.currentTarget.src = fallbackAvatar; }}
+                />
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                   <span
@@ -302,9 +326,9 @@ export default function Navbar() {
                     </span>
                   )}
                 </div>
-              </div>
+              </Link>
 
-              {/* 3. SETTINGS ICON BUTTON */}
+              {/* SETTINGS ICON */}
               <Link
                 to="/settings"
                 className="nav-icon-btn"
@@ -326,7 +350,7 @@ export default function Navbar() {
                 </svg>
               </Link>
 
-              {/* 4. LOGOUT BUTTON */}
+              {/* LOGOUT BUTTON */}
               <button
                 type="button"
                 onClick={logout}

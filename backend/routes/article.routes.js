@@ -221,7 +221,7 @@ router.get('/:articleId/versions', optionalAuth, async (req, res) => {
   }
 });
 
-// 4. ROLLBACK (Explicit Transaction: BEGIN -> Deactivate + Activate Target + Metadata + Links -> COMMIT)
+// 4. ROLLBACK (Explicit Transaction + Triggers Database Audit Trail)
 router.post('/:articleId/rollback', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -241,7 +241,7 @@ router.post('/:articleId/rollback', authenticateToken, async (req, res) => {
       SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
     `;
     if (!isGlobal && membership.length === 0) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+      return res.status(403).json({ success: false, message: 'Forbidden: Insufficient authoring privileges' });
     }
 
     const versionRows = await prisma.$queryRaw`
@@ -255,20 +255,39 @@ router.post('/:articleId/rollback', authenticateToken, async (req, res) => {
     const thumbnail = extractFirstImage(targetVersion.content);
     const mediaIds = extractMediaIds(targetVersion.content);
 
+    // Locate active version number prior to deactivation to pass to trigger
+    const currentActive = await prisma.$queryRaw`
+      SELECT version_number::INT AS version_number
+      FROM article_versions
+      WHERE article_id = ${articleId} AND is_published = TRUE
+      LIMIT 1;
+    `;
+    const prevVersionNumber = currentActive.length > 0 ? currentActive[0].version_number : 1;
+
     // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
+      // 1. Deactivate prior versions
       await client.query(`UPDATE article_versions SET is_published = FALSE WHERE article_id = $1;`, [articleId]);
 
+      // 2. Activate target version and supply metadata to trg_article_versions_rollback
       await client.query(
-        `UPDATE article_versions SET is_published = TRUE, review_status = 'approved' WHERE version_id = $1;`,
-        [targetVersion.version_id]
+        `UPDATE article_versions 
+         SET is_published = TRUE, 
+             review_status = 'approved', 
+             approver_id = $1,
+             rollback_from_version = $2,
+             rollback_report_id = NULL
+         WHERE version_id = $3;`,
+        [userId, prevVersionNumber, targetVersion.version_id]
       );
 
+      // 3. Update main article metadata
       await client.query(
         `UPDATE articles SET description = $1, thumbnail_url = $2, is_published = TRUE WHERE article_id = $3;`,
         [excerpt, thumbnail, articleId]
       );
 
+      // 4. Refresh media associations
       await client.query(`DELETE FROM article_media WHERE article_id = $1;`, [articleId]);
       for (const mId of mediaIds) {
         await client.query(
@@ -282,7 +301,7 @@ router.post('/:articleId/rollback', authenticateToken, async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: `Successfully restored and published Version ${targetVersion.version_number}.`,
+      message: `Successfully restored and published Version ${targetVersion.version_number}. Action logged to audit trail.`,
       version_number: targetVersion.version_number
     });
   } catch (error) {
@@ -291,7 +310,58 @@ router.post('/:articleId/rollback', authenticateToken, async (req, res) => {
   }
 });
 
-// 5. CREATE ARTICLE (Explicit Transaction: BEGIN -> INSERT article + INSERT version + Links -> COMMIT)
+// 5. GET ROLLBACK AUDIT LOGS (Read-Only Shadow Table Inspection)
+router.get('/:articleId/rollback-logs', authenticateToken, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    const articles = await prisma.$queryRaw`
+      SELECT a.article_id::INT AS article_id, a.wiki_id::INT AS wiki_id, a.title
+      FROM articles a WHERE a.article_id = ${articleId} LIMIT 1;
+    `;
+    if (articles.length === 0) return res.status(404).json({ success: false, message: 'Article not found' });
+    const article = articles[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Forbidden: Only wiki authors or administrators can view rollback audit logs.'
+      });
+    }
+
+    const logs = await prisma.$queryRaw`
+      SELECT 
+        l.log_id::INT AS log_id,
+        l.article_id::INT AS article_id,
+        l.user_id::INT AS user_id,
+        COALESCE(u.username, 'System / Moderator') AS user_name,
+        u.profile_pic_url AS user_pic,
+        l.report_id::INT AS report_id,
+        r.reason AS report_reason,
+        l.prev_version::INT AS prev_version,
+        l.new_version::INT AS new_version,
+        l.created_at
+      FROM article_rollback_logs l
+      LEFT JOIN users u ON l.user_id = u.user_id
+      LEFT JOIN reports r ON l.report_id = r.report_id
+      WHERE l.article_id = ${articleId}
+      ORDER BY l.created_at DESC;
+    `;
+
+    res.status(200).json({ success: true, logs });
+  } catch (error) {
+    console.error('Fetch rollback logs error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load rollback audit logs' });
+  }
+});
+
+// 6. CREATE ARTICLE (Explicit Transaction)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { wiki_id, category_id, title, template_type = 'standard', content, edit_summary } = req.body;
@@ -327,7 +397,6 @@ router.post('/', authenticateToken, async (req, res) => {
     const thumbnail = extractFirstImage(content);
     const mediaIds = extractMediaIds(content);
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     const createdArticle = await executeTransaction(async (client) => {
       const artRes = await client.query(
         `INSERT INTO articles (
@@ -390,7 +459,7 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// 6. EDIT FETCH
+// 7. EDIT FETCH
 router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -419,7 +488,7 @@ router.get('/edit/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// 7. COMMIT NEW VERSION (Explicit Transaction: BEGIN -> Revision Insert + Updates -> COMMIT)
+// 8. COMMIT NEW VERSION (Explicit Transaction)
 router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -451,7 +520,6 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
     `;
     const nextVersion = maxVer[0].next_num + 1;
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       if (canPublishDirectly) {
         await client.query(`UPDATE article_versions SET is_published = FALSE WHERE article_id = $1;`, [articleId]);
@@ -508,7 +576,7 @@ router.post('/:articleId/versions', authenticateToken, async (req, res) => {
   }
 });
 
-// 8. LOCK
+// 9. LOCK
 router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -542,7 +610,7 @@ router.patch('/:articleId/lock', authenticateToken, async (req, res) => {
   }
 });
 
-// 9. DELETE ARTICLE (Explicit Transaction: Cascading Cleanup -> COMMIT)
+// 10. DELETE ARTICLE (Explicit Transaction)
 router.delete('/:articleId', authenticateToken, async (req, res) => {
   try {
     const articleId = Number(req.params.articleId);
@@ -562,8 +630,8 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Forbidden' });
     }
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
+      await client.query(`DELETE FROM article_rollback_logs WHERE article_id = $1;`, [articleId]);
       await client.query(`DELETE FROM article_links WHERE source_article_id = $1 OR target_article_id = $1;`, [articleId]);
       await client.query(`DELETE FROM article_media WHERE article_id = $1;`, [articleId]);
       await client.query(`DELETE FROM reading_list_items WHERE article_id = $1;`, [articleId]);
@@ -582,7 +650,7 @@ router.delete('/:articleId', authenticateToken, async (req, res) => {
   }
 });
 
-// 10. GET ARTICLE BY SLUG
+// 11. GET ARTICLE BY SLUG
 router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   try {
     const { wikiSlug, articleSlug } = req.params;
@@ -601,6 +669,8 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
         a.template_type,
         a.is_locked,
         a.is_published,
+        a.needs_contribution,
+        COALESCE(a.contribution_message, '') AS contribution_message,
         a.read_count::INT AS read_count,
         a.created_at,
         w.title AS wiki_title,
@@ -701,7 +771,7 @@ router.get('/:wikiSlug/:articleSlug', optionalAuth, async (req, res) => {
   }
 });
 
-// 11. PENDING REVIEWS
+// 12. PENDING REVIEWS
 router.get('/pending-reviews', authenticateToken, async (req, res) => {
   try {
     const userId = Number(req.user.user_id);
@@ -743,7 +813,7 @@ router.get('/pending-reviews', authenticateToken, async (req, res) => {
   }
 });
 
-// 12. REVIEW REVISION (Explicit Transaction on Approval)
+// 13. REVIEW REVISION (Explicit Transaction on Approval)
 router.post('/versions/:versionId/review', authenticateToken, async (req, res) => {
   try {
     const versionId = Number(req.params.versionId);
@@ -777,7 +847,6 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
       const thumbnail = extractFirstImage(ver.content);
       const mediaIds = extractMediaIds(ver.content);
 
-      // Explicit BEGIN -> COMMIT / ROLLBACK transaction
       await executeTransaction(async (client) => {
         await client.query(`UPDATE article_versions SET is_published = FALSE WHERE article_id = $1;`, [ver.article_id]);
 
@@ -819,6 +888,64 @@ router.post('/versions/:versionId/review', authenticateToken, async (req, res) =
   } catch (error) {
     console.error('Review revision error:', error);
     res.status(500).json({ success: false, message: 'Failed to process revision review' });
+  }
+});
+
+// 14. TOGGLE "NEEDS CONTRIBUTION" STATUS
+router.patch('/:articleId/contribution', authenticateToken, async (req, res) => {
+  try {
+    const articleId = Number(req.params.articleId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+    const { needs_contribution, contribution_message = '' } = req.body;
+
+    const articles = await prisma.$queryRaw`
+      SELECT article_id::INT AS article_id, wiki_id::INT AS wiki_id, needs_contribution, contribution_message
+      FROM articles WHERE article_id = ${articleId} LIMIT 1;
+    `;
+    if (articles.length === 0) {
+      return res.status(404).json({ success: false, message: 'Article not found' });
+    }
+    const article = articles[0];
+
+    const membership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships WHERE wiki_id = ${article.wiki_id} AND user_id = ${userId} LIMIT 1;
+    `;
+
+    if (!isGlobal && membership.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wiki authors or administrators can manage contribution requests.'
+      });
+    }
+
+    const nextState = typeof needs_contribution === 'boolean' 
+      ? needs_contribution 
+      : !article.needs_contribution;
+      
+    const nextMessage = nextState 
+      ? (contribution_message.trim() || 'Authors have requested community contributions, improvements, or section extensions for this topic.')
+      : null;
+
+    const updated = await prisma.$queryRaw`
+      UPDATE articles
+      SET needs_contribution = ${nextState},
+          contribution_message = ${nextMessage}
+      WHERE article_id = ${articleId}
+      RETURNING needs_contribution, contribution_message;
+    `;
+
+    res.status(200).json({
+      success: true,
+      needs_contribution: updated[0].needs_contribution,
+      contribution_message: updated[0].contribution_message,
+      message: updated[0].needs_contribution
+        ? 'Article marked as seeking community contributions.'
+        : 'Contribution request cleared.'
+    });
+  } catch (error) {
+    console.error('Update contribution status error:', error);
+    res.status(500).json({ success: false, message: 'Failed to update contribution status' });
   }
 });
 

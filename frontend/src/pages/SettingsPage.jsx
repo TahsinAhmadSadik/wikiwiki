@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/api';
 import '../styles/settings.css';
@@ -13,6 +13,9 @@ export default function SettingsPage() {
 
   const [userData, setUserData] = useState(null);
   const [bio, setBio] = useState('');
+  const [profilePicUrl, setProfilePicUrl] = useState('');
+  const [uploadingPic, setUploadingPic] = useState(false);
+
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -30,6 +33,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState({ text: '', type: '' });
 
+  const fallbackAvatar = `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(user?.username || 'WikiUser')}`;
+  const effectiveAvatar = profilePicUrl || fallbackAvatar;
+
   useEffect(() => {
     const loadUserData = async () => {
       try {
@@ -37,6 +43,7 @@ export default function SettingsPage() {
         if (res.user) {
           setUserData(res.user);
           setBio(res.user.bio || '');
+          setProfilePicUrl(res.user.profile_pic_url || '');
           updateUser(res.user);
         }
         if (res.interests) {
@@ -53,14 +60,87 @@ export default function SettingsPage() {
     loadUserData();
   }, []);
 
+  const getStoredToken = () => {
+    for (const key of ['token', 'accessToken', 'authToken', 'jwt', 'access_token']) {
+      const val = localStorage.getItem(key);
+      if (val) return val.replace(/^"|"$/g, '');
+    }
+    try {
+      const rawUser = localStorage.getItem('user');
+      if (rawUser) {
+        const parsed = JSON.parse(rawUser);
+        if (parsed.token) return parsed.token;
+        if (parsed.accessToken) return parsed.accessToken;
+      }
+    } catch (_) {}
+    return null;
+  };
+
+  const getUploadEndpoint = () => {
+    const raw = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const clean = raw.replace(/\/+$/, '');
+    return clean.endsWith('/api') ? `${clean}/media/upload` : `${clean}/api/media/upload`;
+  };
+
+  const handleAvatarFileUpload = async (file) => {
+    if (!file) return;
+    setUploadingPic(true);
+    setMessage({ text: '', type: '' });
+
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = getStoredToken();
+
+    try {
+      const uploadUrl = getUploadEndpoint();
+      const res = await fetch(uploadUrl, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: formData
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Avatar upload failed');
+      }
+
+      setProfilePicUrl(data.url);
+      const patchRes = await api.patch('/users/profile', { profile_pic_url: data.url });
+      updateUser(patchRes.user);
+      setMessage({ text: 'Profile picture updated successfully!', type: 'success' });
+    } catch (err) {
+      setMessage({ text: err.message || 'Failed to upload profile picture.', type: 'error' });
+    } finally {
+      setUploadingPic(false);
+    }
+  };
+
+  const handleResetAvatar = async () => {
+    setSaving(true);
+    setMessage({ text: '', type: '' });
+    try {
+      const res = await api.patch('/users/profile', { profile_pic_url: '' });
+      setProfilePicUrl('');
+      updateUser(res.user);
+      setMessage({ text: 'Profile picture reset to default avatar.', type: 'success' });
+    } catch (err) {
+      setMessage({ text: err.data?.message || err.message, type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
     setSaving(true);
     setMessage({ text: '', type: '' });
 
     try {
-      const res = await api.patch('/users/profile', { bio });
-      updateUser({ bio: res.user.bio });
+      const res = await api.patch('/users/profile', { bio, profile_pic_url: profilePicUrl });
+      updateUser(res.user);
       setMessage({ text: 'Profile updated successfully', type: 'success' });
     } catch (err) {
       setMessage({ text: err.data?.message || err.message, type: 'error' });
@@ -120,7 +200,7 @@ export default function SettingsPage() {
     e.preventDefault();
     setDeleteError('');
 
-    if (deleteConfirmationEmail.trim().toLowerCase() !== user?.email.toLowerCase()) {
+    if (deleteConfirmationEmail.trim().toLowerCase() !== user?.email?.toLowerCase()) {
       setDeleteError('Entered email does not match your account email.');
       return;
     }
@@ -129,12 +209,13 @@ export default function SettingsPage() {
 
     try {
       await api.delete('/users/account', {
-        body: { confirm_email: deleteConfirmationEmail.trim() },
+        confirm_email: deleteConfirmationEmail.trim(),
+        body: { confirm_email: deleteConfirmationEmail.trim() }
       });
       await logout();
       navigate('/register');
     } catch (err) {
-      setDeleteError(err.data?.message || err.message);
+      setDeleteError(err.data?.message || err.message || 'Failed to delete account.');
       setDeleting(false);
     }
   };
@@ -197,7 +278,7 @@ export default function SettingsPage() {
       {/* PROFILE TAB */}
       {activeTab === 'profile' && (
         <>
-          {/* ACCOUNT STANDING & DEMERIT GAUGE */}
+          {/* COMMUNITY STANDING GAUGE */}
           <div style={{
             backgroundColor: '#0d0d0f',
             border: demerits > 0 ? '1px solid #ef444460' : '1px solid #1f1f23',
@@ -249,6 +330,98 @@ export default function SettingsPage() {
               }}>
                 {demerits} / 5
               </span>
+            </div>
+          </div>
+
+          {/* AVATAR CONFIGURATION CARD */}
+          <div className="settings-card" style={{ marginBottom: '1.75rem' }}>
+            <h2>Profile Avatar</h2>
+            <p className="section-desc">Personalize your avatar with an uploaded image or use the gender-neutral robot avatar.</p>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+              <div style={{ position: 'relative' }}>
+                <img
+                  src={effectiveAvatar}
+                  alt="Profile Avatar"
+                  style={{
+                    width: 84,
+                    height: 84,
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    backgroundColor: '#141417',
+                    border: '2px solid rgba(168, 85, 247, 0.4)',
+                    boxShadow: '0 4px 14px rgba(0, 0, 0, 0.5)'
+                  }}
+                  onError={(e) => { e.currentTarget.src = fallbackAvatar; }}
+                />
+                {uploadingPic && (
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    borderRadius: '50%',
+                    backgroundColor: 'rgba(0,0,0,0.6)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    color: '#c084fc'
+                  }}>
+                    ⏳
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.8rem', color: profilePicUrl ? '#10b981' : '#a1a1aa', fontWeight: 500 }}>
+                  {profilePicUrl ? '✓ Custom uploaded picture' : '🤖 Default DiceBear avatar active'}
+                </span>
+
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <label style={{
+                    backgroundColor: '#18181b',
+                    color: '#f4f4f5',
+                    border: '1px solid #3f3f46',
+                    borderRadius: 6,
+                    padding: '0.45rem 0.95rem',
+                    fontSize: '0.8125rem',
+                    cursor: uploadingPic ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem'
+                  }}>
+                    {uploadingPic ? 'Uploading...' : '📁 Upload New Photo'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      disabled={uploadingPic}
+                      onChange={(e) => handleAvatarFileUpload(e.target.files?.[0])}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+
+                  {profilePicUrl && (
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={handleResetAvatar}
+                      style={{
+                        backgroundColor: 'transparent',
+                        color: '#ef4444',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: 6,
+                        padding: '0.45rem 0.85rem',
+                        fontSize: '0.8125rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Reset to Default
+                    </button>
+                  )}
+                </div>
+                <span style={{ fontSize: '0.72rem', color: '#71717a' }}>
+                  Supported formats: JPG, PNG, WebP, SVG. Max 10MB.
+                </span>
+              </div>
             </div>
           </div>
 
@@ -334,7 +507,6 @@ export default function SettingsPage() {
             </form>
           </div>
 
-          {/* DANGER ZONE */}
           <div className="settings-card danger">
             <h2>Danger Zone</h2>
             <p className="section-desc">Permanently remove your account and all associated preferences</p>
@@ -448,7 +620,7 @@ export default function SettingsPage() {
                   className="danger-btn"
                   disabled={
                     deleting ||
-                    deleteConfirmationEmail.trim().toLowerCase() !== user?.email.toLowerCase()
+                    deleteConfirmationEmail.trim().toLowerCase() !== user?.email?.toLowerCase()
                   }
                 >
                   {deleting ? 'Deleting...' : 'Delete Permanently'}

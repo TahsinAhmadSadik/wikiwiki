@@ -7,6 +7,75 @@ import '../styles/auth.css';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+// Sanitize, assign unique IDs, and normalize types for incoming database blocks
+function normalizeBlocks(rawBlocks) {
+  if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) {
+    return [{ id: `block-${Date.now()}-0`, type: 'paragraph', data: { text: '' } }];
+  }
+
+  const seenIds = new Set();
+
+  const cleaned = rawBlocks
+    .map((b, index) => {
+      if (!b || typeof b !== 'object') return null;
+
+      // 1. Guarantee a distinct, unique string ID
+      let id = b.id != null && String(b.id).trim() !== '' ? String(b.id) : null;
+      if (!id || seenIds.has(id)) {
+        id = `block-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`;
+      }
+      seenIds.add(id);
+
+      // 2. Normalize block type (e.g. 'heading' -> 'header', 'p'/'text' -> 'paragraph')
+      const rawType = (b.type || '').toLowerCase().trim();
+      let type = 'paragraph';
+
+      if (['header', 'heading', 'h1', 'h2', 'h3'].includes(rawType)) {
+        type = 'header';
+      } else if (['image', 'img'].includes(rawType)) {
+        type = 'image';
+      } else {
+        type = 'paragraph';
+      }
+
+      // 3. Normalize block data payload
+      let data = { ...b.data };
+
+      if (type === 'image') {
+        const url = data.url || data.file?.url || b.url || '';
+        const caption = data.caption || b.caption || '';
+        data = { url, caption };
+      } else if (type === 'header') {
+        const text = data.text ?? b.text ?? '';
+        data = { text: String(text) };
+      } else {
+        let text = data.text ?? b.text;
+        if (text == null) {
+          if (Array.isArray(data.items)) {
+            // Convert list blocks to formatted text lines
+            text = data.items
+              .map((item) => (typeof item === 'string' ? `• ${item}` : `• ${item?.content || ''}`))
+              .join('\n');
+          } else if (data.code != null) {
+            text = String(data.code);
+          } else if (typeof b.data === 'string') {
+            text = b.data;
+          } else {
+            text = '';
+          }
+        }
+        data = { text: String(text) };
+      }
+
+      return { id, type, data };
+    })
+    .filter(Boolean);
+
+  return cleaned.length > 0
+    ? cleaned
+    : [{ id: `block-${Date.now()}-0`, type: 'paragraph', data: { text: '' } }];
+}
+
 function ImageBlockPreview({ url, caption, formatImageUrl }) {
   const [status, setStatus] = useState('loading');
 
@@ -98,14 +167,14 @@ export default function ArticleEditorPage() {
   const [editSummary, setEditSummary] = useState('');
   const [templateType, setTemplateType] = useState('standard');
 
-  // Content blocks
+  // Content blocks with resilient initialization
   const [blocks, setBlocks] = useState([
-    { id: '1', type: 'paragraph', data: { text: '' } }
+    { id: 'block-init-1', type: 'paragraph', data: { text: '' } }
   ]);
 
   // DOM refs to textareas and active cursor tracking
   const textareaRefs = useRef({});
-  const lastActiveBlockRef = useRef({ id: '1', start: 0, end: 0 });
+  const lastActiveBlockRef = useRef({ id: 'block-init-1', start: 0, end: 0 });
 
   const [uploadingBlockId, setUploadingBlockId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -148,9 +217,26 @@ export default function ArticleEditorPage() {
           setCurrentArticleSlug(art.slug || '');
           setCurrentWikiSlug(art.wiki_slug || '');
 
-          if (artRes.latestVersion?.content?.blocks) {
-            setBlocks(artRes.latestVersion.content.blocks);
-            const firstP = artRes.latestVersion.content.blocks.find((b) => b.type === 'paragraph');
+          // Normalize raw content blocks
+          const rawContent = artRes.latestVersion?.content;
+          let rawBlocks = null;
+
+          if (typeof rawContent === 'string') {
+            try {
+              const parsed = JSON.parse(rawContent);
+              rawBlocks = parsed.blocks || (Array.isArray(parsed) ? parsed : null);
+            } catch (_) {
+              rawBlocks = [{ type: 'paragraph', data: { text: rawContent } }];
+            }
+          } else if (rawContent && typeof rawContent === 'object') {
+            rawBlocks = rawContent.blocks || (Array.isArray(rawContent) ? rawContent : null);
+          }
+
+          if (rawBlocks) {
+            const safeBlocks = normalizeBlocks(rawBlocks);
+            setBlocks(safeBlocks);
+
+            const firstP = safeBlocks.find((b) => b.type === 'paragraph') || safeBlocks[0];
             if (firstP) {
               lastActiveBlockRef.current = { id: firstP.id, start: 0, end: 0 };
             }
@@ -253,8 +339,7 @@ export default function ArticleEditorPage() {
     };
   };
 
-  // Universal button handler: inserts sample link into active paragraph at cursor position
-  const handleUniversalInsertLink = (linkText = '[[Introduction to Python]]') => {
+  const handleUniversalInsertLink = (linkText = '[Link_Text](/wiki/wiki_name/article_slug)') => {
     let targetBlockId = lastActiveBlockRef.current.id;
     let targetBlock = blocks.find((b) => b.id === targetBlockId && b.type === 'paragraph');
 
@@ -271,9 +356,9 @@ export default function ArticleEditorPage() {
       }
     }
 
-    // If there is still no paragraph block in the article, create one with the link
+    // If there is still no paragraph block in the article, create one
     if (!targetBlock) {
-      const newId = String(Date.now());
+      const newId = `block-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       setBlocks((prev) => [...prev, { id: newId, type: 'paragraph', data: { text: linkText } }]);
       lastActiveBlockRef.current = { id: newId, start: linkText.length, end: linkText.length };
       return;
@@ -296,10 +381,11 @@ export default function ArticleEditorPage() {
     handleBlockChange(targetBlockId, newText);
 
     setTimeout(() => {
-      if (textarea) {
-        textarea.focus();
+      const el = textareaRefs.current[targetBlockId];
+      if (el) {
+        el.focus();
         const newCursorPos = start + formattedLink.length;
-        textarea.setSelectionRange(newCursorPos, newCursorPos);
+        el.setSelectionRange(newCursorPos, newCursorPos);
         lastActiveBlockRef.current = { id: targetBlockId, start: newCursorPos, end: newCursorPos };
       }
     }, 0);
@@ -382,21 +468,22 @@ export default function ArticleEditorPage() {
   };
 
   const handleAddBlock = (type) => {
-    const newId = String(Date.now());
+    const newId = `block-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const newBlock = {
       id: newId,
       type,
       data: type === 'image' ? { url: '', caption: '' } : { text: '' }
     };
-    setBlocks([...blocks, newBlock]);
+    setBlocks((prev) => [...prev, newBlock]);
     if (type === 'paragraph') {
       lastActiveBlockRef.current = { id: newId, start: 0, end: 0 };
     }
   };
 
   const handleRemoveBlock = (id) => {
-    if (blocks.length === 1) return;
-    setBlocks(blocks.filter((b) => b.id !== id));
+    if (blocks.length <= 1) return;
+    setBlocks((prev) => prev.filter((b) => b.id !== id));
+    delete textareaRefs.current[id];
   };
 
   const formatImageUrl = (url) => {
@@ -868,26 +955,7 @@ export default function ArticleEditorPage() {
                 </div>
               )}
 
-              {/* 2. Paragraph Block */}
-              {b.type === 'paragraph' && (
-                <div style={{ flex: 1 }}>
-                  <textarea
-                    ref={(el) => { textareaRefs.current[b.id] = el; }}
-                    rows={3}
-                    placeholder="Write content paragraph (supports [[Wiki Link]] syntax)..."
-                    value={b.data?.text || ''}
-                    onChange={(e) => handleBlockChange(b.id, e.target.value)}
-                    onFocus={(e) => handleCursorUpdate(b.id, e)}
-                    onSelect={(e) => handleCursorUpdate(b.id, e)}
-                    onKeyUp={(e) => handleCursorUpdate(b.id, e)}
-                    onClick={(e) => handleCursorUpdate(b.id, e)}
-                    className="auth-input"
-                    style={{ resize: 'vertical', lineHeight: 1.6 }}
-                  />
-                </div>
-              )}
-
-              {/* 3. Image Media Block */}
+              {/* 2. Image Media Block */}
               {b.type === 'image' && (
                 <div style={{
                   flex: 1,
@@ -943,6 +1011,25 @@ export default function ArticleEditorPage() {
                     url={b.data?.url}
                     caption={b.data?.caption}
                     formatImageUrl={formatImageUrl}
+                  />
+                </div>
+              )}
+
+              {/* 3. Paragraph Block (and safety fallback for any other type) */}
+              {b.type !== 'header' && b.type !== 'image' && (
+                <div style={{ flex: 1 }}>
+                  <textarea
+                    ref={(el) => { textareaRefs.current[b.id] = el; }}
+                    rows={3}
+                    placeholder="Write content paragraph (supports [[Wiki Link]] syntax)..."
+                    value={b.data?.text || ''}
+                    onChange={(e) => handleBlockChange(b.id, e.target.value)}
+                    onFocus={(e) => handleCursorUpdate(b.id, e)}
+                    onSelect={(e) => handleCursorUpdate(b.id, e)}
+                    onKeyUp={(e) => handleCursorUpdate(b.id, e)}
+                    onClick={(e) => handleCursorUpdate(b.id, e)}
+                    className="auth-input"
+                    style={{ resize: 'vertical', lineHeight: 1.6 }}
                   />
                 </div>
               )}

@@ -3,18 +3,55 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
-import { Resend } from 'resend';
 import { prisma } from '../lib/prisma.js';
 import { executeTransaction } from '../lib/db.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  validate: { xForwardedForHeader: false },
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
+
+// Helper: Dispatch Transactional Email via EmailJS HTTPS REST API (Port 443)
+async function sendEmailJSEmail({ toEmail, templateParams, templateIdOverride }) {
+  const serviceId = process.env.EMAILJS_SERVICE_ID;
+  const templateId = templateIdOverride || process.env.EMAILJS_TEMPLATE_ID;
+  const publicKey = process.env.EMAILJS_PUBLIC_KEY;
+  const privateKey = process.env.EMAILJS_PRIVATE_KEY;
+
+  if (!serviceId || !templateId || !publicKey) {
+    console.warn('[EMAIL WARNING] EmailJS credentials missing in environment.');
+    return;
+  }
+
+  const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      service_id: serviceId,
+      template_id: templateId,
+      user_id: publicKey,         // EmailJS Public Key
+      accessToken: privateKey,    // EmailJS Private Key
+      template_params: {
+        to_email: toEmail,
+        ...templateParams
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`EmailJS API error (${response.status}): ${errorText}`);
+  }
+
+  console.log(`[EMAIL DISPATCHED] Verification email successfully sent to ${toEmail}`);
+}
 
 // 1. REGISTER
 router.post('/register', authLimiter, async (req, res) => {
@@ -51,35 +88,39 @@ router.post('/register', authLimiter, async (req, res) => {
       VALUES (${username}, ${email}, ${passwordHash}, ${tokenHash}, ${expiresAt});
     `;
 
-    const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/verify-email?token=${rawToken}`;
+    // Construct clean URL (strip accidental markdown brackets or trailing slashes)
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173')
+      .replace(/[\]\)\(\[]/g, '')
+      .replace(/\/+$/, '');
+    const verificationUrl = `${frontendBase}/verify-email?token=${rawToken}`;
+    
     console.log('----------------------------------------------------');
     console.log(`[VERIFICATION LINK for ${email}]: ${verificationUrl}`);
     console.log('----------------------------------------------------');
 
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: 'Wiki Support <onboarding@resend.dev>',
-      to: email,
-      subject: 'Verify your email to complete registration',
-      html: `
-        <h2>Welcome to the Wiki!</h2>
-        <p>Please confirm your email address to complete creating your account.</p>
-        <p><a href="${verificationUrl}">Click here to verify and activate your account</a></p>
-        <p>This link expires in 24 hours.</p>
-      `
-    });
+    // Send Verification Email via EmailJS HTTPS API (Non-blocking)
+    try {
+      await sendEmailJSEmail({
+        toEmail: email,
+        templateParams: {
+          verification_url: verificationUrl
+        }
+      });
+    } catch (mailErr) {
+      console.error('[EMAIL DISPATCH FAILED]:', mailErr.message);
+    }
 
     res.status(200).json({
       success: true,
-      message: 'Verification email dispatched. Please verify your email to complete registration.'
+      message: 'Verification email dispatched. Please check your inbox (and spam folder) to complete registration.'
     });
   } catch (error) {
     console.error('Registration dispatch error:', error);
-    res.status(500).json({ success: false, message: 'Failed to dispatch verification email' });
+    res.status(500).json({ success: false, message: 'Failed to process registration' });
   }
 });
 
-// 2. VERIFY EMAIL (Explicit Transaction: INSERT user + DELETE pending)
+// 2. VERIFY EMAIL
 router.post('/verify-email', authLimiter, async (req, res) => {
   try {
     const { token } = req.body;
@@ -110,11 +151,10 @@ router.post('/verify-email', authLimiter, async (req, res) => {
       return res.status(409).json({ success: false, message: 'Username or email is already registered.' });
     }
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       await client.query(
-        `INSERT INTO users (username, email, password_hash, global_role)
-         VALUES ($1, $2, $3, 'contributor');`,
+        `INSERT INTO users (username, email, password_hash, global_role, has_onboarded)
+         VALUES ($1, $2, $3, 'contributor', FALSE);`,
         [pending.username, pending.email, pending.password_hash]
       );
 
@@ -143,7 +183,15 @@ router.post('/login', authLimiter, async (req, res) => {
     }
 
     const users = await prisma.$queryRaw`
-      SELECT user_id, username, email, password_hash, global_role, is_banned, token_version, has_onboarded
+      SELECT 
+        user_id::INT AS user_id, 
+        username, 
+        email, 
+        password_hash, 
+        global_role, 
+        is_banned, 
+        token_version, 
+        COALESCE(has_onboarded, FALSE) AS has_onboarded
       FROM users WHERE email = ${email} LIMIT 1;
     `;
 
@@ -170,7 +218,7 @@ router.post('/login', authLimiter, async (req, res) => {
         username: user.username,
         email: user.email,
         global_role: user.global_role,
-        has_onboarded: user.has_onboarded
+        has_onboarded: Boolean(user.has_onboarded)
       }
     });
   } catch (error) {
@@ -223,18 +271,27 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
       VALUES (${user.user_id}, ${tokenHash}, ${expiresAt});
     `;
 
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${rawToken}`;
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: 'Wiki Support <onboarding@resend.dev>',
-      to: user.email,
-      subject: 'Reset your Wiki account password',
-      html: `
-        <p>You requested a password reset for your Wiki account.</p>
-        <p><a href="${resetUrl}">Click here to reset your password</a></p>
-        <p>This link expires in 15 minutes.</p>
-      `
-    });
+    const frontendBase = (process.env.FRONTEND_URL || 'http://localhost:5173')
+      .replace(/[\]\)\(\[]/g, '')
+      .replace(/\/+$/, '');
+    const resetUrl = `${frontendBase}/reset-password?token=${rawToken}`;
+
+    console.log('----------------------------------------------------');
+    console.log(`[PASSWORD RESET LINK for ${user.email}]: ${resetUrl}`);
+    console.log('----------------------------------------------------');
+
+    // Attempt dispatch if a reset template is provided; otherwise keep console log active
+    try {
+      await sendEmailJSEmail({
+        toEmail: user.email,
+        templateParams: {
+          verification_url: resetUrl
+        },
+        templateIdOverride: process.env.EMAILJS_RESET_TEMPLATE_ID || process.env.EMAILJS_TEMPLATE_ID
+      });
+    } catch (mailErr) {
+      console.error('[PASSWORD RESET EMAIL FAILED]:', mailErr.message);
+    }
 
     res.status(200).json({
       success: true,
@@ -246,7 +303,7 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
   }
 });
 
-// 6. RESET PASSWORD (Explicit Transaction: UPDATE password + UPDATE reset token)
+// 6. RESET PASSWORD
 router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const { token, password } = req.body;
@@ -270,7 +327,6 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 
     const newPasswordHash = await bcrypt.hash(password, 12);
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       await client.query(
         `UPDATE users SET password_hash = $1, token_version = token_version + 1 WHERE user_id = $2;`,
@@ -293,12 +349,26 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 });
 
 // 7. GET ONBOARDING DATA
-router.get('/onboarding-data', authenticateToken, async (req, res) => {
+router.get('/onboarding-data', optionalAuth, async (req, res) => {
   try {
-    const categories = await prisma.$queryRaw`SELECT category_id, name, description FROM categories ORDER BY name ASC;`;
-    const wikis = await prisma.$queryRaw`
-      SELECT wiki_id, title, slug, description, total_views::INT AS total_views FROM wiki_spaces ORDER BY total_views DESC LIMIT 12;
+    const categories = await prisma.$queryRaw`
+      SELECT category_id::INT AS category_id, name, description 
+      FROM categories 
+      ORDER BY name ASC;
     `;
+
+    const wikis = await prisma.$queryRaw`
+      SELECT 
+        wiki_id::INT AS wiki_id, 
+        title, 
+        slug, 
+        description, 
+        total_views::INT AS total_views 
+      FROM wiki_spaces 
+      ORDER BY total_views DESC 
+      LIMIT 12;
+    `;
+
     res.status(200).json({ success: true, categories, wikis });
   } catch (error) {
     console.error('Failed to fetch onboarding data:', error);
@@ -306,13 +376,12 @@ router.get('/onboarding-data', authenticateToken, async (req, res) => {
   }
 });
 
-// 8. ONBOARDING (Explicit Transaction: Batch Inserts + User Update)
+// 8. ONBOARDING SUBMISSION
 router.post('/onboarding', authenticateToken, async (req, res) => {
   try {
     const { category_ids = [], wiki_ids = [] } = req.body;
     const userId = Number(req.user.user_id);
 
-    // Explicit BEGIN -> COMMIT / ROLLBACK transaction
     await executeTransaction(async (client) => {
       for (const catId of category_ids) {
         await client.query(
@@ -338,7 +407,11 @@ router.post('/onboarding', authenticateToken, async (req, res) => {
       );
     });
 
-    res.status(200).json({ success: true, message: 'Interests saved successfully' });
+    res.status(200).json({ 
+      success: true, 
+      has_onboarded: true, 
+      message: 'Interests saved successfully' 
+    });
   } catch (error) {
     console.error('Onboarding error:', error);
     res.status(500).json({ success: false, message: 'Failed to record selected interests' });

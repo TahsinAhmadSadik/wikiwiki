@@ -69,5 +69,40 @@ router.get('/stats', authenticateToken, requireRole('owner', 'admin'), async (re
     res.status(500).json({ success: false, message: 'Failed to load global statistics' });
   }
 });
+// PENDING ADMIN TASKS COUNT
+router.get('/pending-count', authenticateToken, requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const pendingRevisions = await prisma.$queryRaw`
+      SELECT COUNT(*)::INT AS count
+      FROM article_versions av
+      WHERE av.review_status = 'pending';
+    `;
+
+    const pendingReports = await prisma.$queryRaw`
+      SELECT COUNT(*)::INT AS count
+      FROM reports r
+      WHERE r.status = 'pending';
+    `;
+
+    const revisionCount = pendingRevisions[0].count;
+    const reportCount = pendingReports[0].count;
+
+    res.status(200).json({
+      success: true,
+      pending_revisions: revisionCount,
+      pending_reports: reportCount,
+      total_pending: revisionCount + reportCount,
+      has_pending: revisionCount > 0 || reportCount > 0
+    });
+  } catch (error) {
+    console.error('Pending admin count error:', error);
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to load pending admin count'
+    });
+  }
+});
+
 
 export default router;

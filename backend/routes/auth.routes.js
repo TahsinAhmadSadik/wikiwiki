@@ -230,8 +230,10 @@ router.post('/login', authLimiter, async (req, res) => {
 // 4. LOGOUT
 router.post('/logout', authenticateToken, async (req, res) => {
   try {
+    const updateKey = Number(process.env.TOKEN_UPDATE_KEY) || 1;
+
     await prisma.$executeRaw`
-      UPDATE users SET token_version = token_version + 1 WHERE user_id = ${req.user.user_id};
+      UPDATE users SET token_version = token_version + ${updateKey} WHERE user_id = ${req.user.user_id};
     `;
     res.status(200).json({ success: true, message: 'Logged out successfully' });
   } catch (error) {

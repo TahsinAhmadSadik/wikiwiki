@@ -25,6 +25,7 @@ async function request(endpoint, options = {}) {
 
   // 2. Adjust headers if payload is FormData (e.g. file uploads in Editor / Profile)[cite: 15]
   if (options.body instanceof FormData) {
+    // Binary File Uploads
     delete headers['Content-Type'];
   } else if (options.body && typeof options.body === 'object') {
     options.body = JSON.stringify(options.body);

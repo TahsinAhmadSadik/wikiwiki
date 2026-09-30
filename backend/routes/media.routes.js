@@ -7,10 +7,6 @@ import { optionalAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.get('/test', (req, res) => {
-  res.json({ success: true, message: 'Media route is active and responding!' });
-});
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },

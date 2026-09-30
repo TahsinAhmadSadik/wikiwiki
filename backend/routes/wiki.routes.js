@@ -332,20 +332,63 @@ router.delete('/:wikiId', authenticateToken, async (req, res) => {
   }
 });
 
-// 7. ASSIGN CO-AUTHOR
-router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author'), async (req, res) => {
+// (Site Owner, Global Admin, Wiki Creator, or Primary Author)
+async function canManageWikiMembers(user, wikiId) {
+  if (['owner', 'admin'].includes(user.global_role)) return true;
+
+  const authorCheck = await prisma.$queryRaw`
+    SELECT 1 
+    FROM wiki_spaces w
+    LEFT JOIN wiki_memberships wm 
+      ON w.wiki_id = wm.wiki_id AND wm.user_id = ${Number(user.user_id)}
+    WHERE w.wiki_id = ${Number(wikiId)} 
+      AND (w.creator_id = ${Number(user.user_id)} OR wm.role = 'author'::wiki_role_enum)
+    LIMIT 1;
+  `;
+  return authorCheck.length > 0;
+}
+
+// 7. ASSIGN / ADD CO-AUTHOR
+router.post('/:wikiId/members', authenticateToken, async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
     const { email } = req.body;
-    if (!email) return res.status(400).json({ success: false, message: 'User email is required' });
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'User email is required' });
+    }
+
+    // Verify owner / admin / author permission
+    const hasPermission = await canManageWikiMembers(req.user, wikiId);
+    if (!hasPermission) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wiki authors, admins, or site owners can assign co-authors'
+      });
+    }
 
     const users = await prisma.$queryRaw`
-      SELECT user_id::INT AS user_id, username, email, is_banned FROM users WHERE LOWER(email) = ${email.trim().toLowerCase()} LIMIT 1;
+      SELECT user_id::INT AS user_id, username, email, is_banned 
+      FROM users 
+      WHERE LOWER(email) = ${email.trim().toLowerCase()} 
+      LIMIT 1;
     `;
-    if (users.length === 0) return res.status(404).json({ success: false, message: 'No registered user found with that email' });
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: 'No registered user found with that email' });
+    }
 
     const targetUser = users[0];
-    if (targetUser.is_banned) return res.status(400).json({ success: false, message: 'Cannot assign a banned user' });
+    if (targetUser.is_banned) {
+      return res.status(400).json({ success: false, message: 'Cannot assign a banned user' });
+    }
+
+    // Check if target is already the primary author/creator
+    const wiki = await prisma.$queryRaw`
+      SELECT creator_id::INT AS creator_id FROM wiki_spaces WHERE wiki_id = ${wikiId} LIMIT 1;
+    `;
+    if (wiki.length > 0 && wiki[0].creator_id === targetUser.user_id) {
+      return res.status(400).json({ success: false, message: 'User is already the primary author of this wiki' });
+    }
 
     await prisma.$executeRaw`
       INSERT INTO wiki_memberships (user_id, wiki_id, role)
@@ -364,18 +407,102 @@ router.post('/:wikiId/members', authenticateToken, authorizeWikiAccess('author')
   }
 });
 
-// 8. GET MEMBERS
-router.get('/:wikiId/members', authenticateToken, authorizeWikiAccess('co_author'), async (req, res) => {
+// 8. GET MEMBERS (Accessible to Owner, Admin, Authors, and Co-Authors)
+router.get('/:wikiId/members', authenticateToken, async (req, res) => {
   try {
     const wikiId = Number(req.params.wikiId);
+    const userId = Number(req.user.user_id);
+    const isGlobal = ['owner', 'admin'].includes(req.user.global_role);
+
+    if (!isGlobal) {
+      const membership = await prisma.$queryRaw`
+        SELECT 1 FROM wiki_memberships 
+        WHERE wiki_id = ${wikiId} AND user_id = ${userId}
+        LIMIT 1;
+      `;
+      const isCreator = await prisma.$queryRaw`
+        SELECT 1 FROM wiki_spaces WHERE wiki_id = ${wikiId} AND creator_id = ${userId} LIMIT 1;
+      `;
+      if (membership.length === 0 && isCreator.length === 0) {
+        return res.status(403).json({ success: false, message: 'Forbidden' });
+      }
+    }
+
     const members = await prisma.$queryRaw`
-      SELECT u.user_id::INT AS user_id, u.username, u.email, wm.role, wm.assigned_at
-      FROM wiki_memberships wm INNER JOIN users u ON wm.user_id = u.user_id
-      WHERE wm.wiki_id = ${wikiId} ORDER BY wm.role ASC, u.username ASC;
+      SELECT 
+        u.user_id::INT AS user_id, 
+        u.username, 
+        u.email, 
+        wm.role, 
+        wm.assigned_at
+      FROM wiki_memberships wm 
+      INNER JOIN users u ON wm.user_id = u.user_id
+      WHERE wm.wiki_id = ${wikiId} 
+      ORDER BY 
+        CASE WHEN wm.role = 'author' THEN 1 ELSE 2 END,
+        u.username ASC;
     `;
     res.status(200).json({ success: true, members });
   } catch (error) {
+    console.error('Fetch members error:', error);
     res.status(500).json({ success: false, message: 'Failed to load wiki members' });
+  }
+});
+
+// 8.1 REMOVE CO-AUTHOR (Owner, Admin, or Author)
+router.delete('/:wikiId/members/:memberId', authenticateToken, async (req, res) => {
+  try {
+    const wikiId = Number(req.params.wikiId);
+    const targetUserId = Number(req.params.memberId);
+
+    if (!targetUserId || isNaN(targetUserId)) {
+      return res.status(400).json({ success: false, message: 'Valid member user ID is required' });
+    }
+
+    // Verify owner / admin / author permission
+    const hasPermission = await canManageWikiMembers(req.user, wikiId);
+    if (!hasPermission) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only wiki authors, admins, or site owners can remove members'
+      });
+    }
+
+    // Guard: Prevent removing primary author or creator
+    const wiki = await prisma.$queryRaw`
+      SELECT creator_id::INT AS creator_id FROM wiki_spaces WHERE wiki_id = ${wikiId} LIMIT 1;
+    `;
+    if (wiki.length > 0 && wiki[0].creator_id === targetUserId) {
+      return res.status(400).json({ success: false, message: 'Cannot remove the primary author/creator of this wiki' });
+    }
+
+    const targetMembership = await prisma.$queryRaw`
+      SELECT role FROM wiki_memberships 
+      WHERE wiki_id = ${wikiId} AND user_id = ${targetUserId} 
+      LIMIT 1;
+    `;
+    if (targetMembership.length === 0) {
+      return res.status(404).json({ success: false, message: 'User is not a member of this wiki' });
+    }
+
+    if (targetMembership[0].role === 'author') {
+      return res.status(400).json({ success: false, message: 'Cannot remove an author. Only co-authors can be removed.' });
+    }
+
+    await prisma.$executeRaw`
+      DELETE FROM wiki_memberships
+      WHERE wiki_id = ${wikiId} 
+        AND user_id = ${targetUserId} 
+        AND role = 'co_author'::wiki_role_enum;
+    `;
+
+    res.status(200).json({
+      success: true,
+      message: 'Co-Author removed successfully'
+    });
+  } catch (error) {
+    console.error('Remove co-author error:', error);
+    res.status(500).json({ success: false, message: 'Failed to remove co-author' });
   }
 });
 

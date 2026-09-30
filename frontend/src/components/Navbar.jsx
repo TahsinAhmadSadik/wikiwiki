@@ -231,7 +231,7 @@ export default function Navbar() {
                   Studio
                 </Link>
 
-    {['admin', 'owner'].includes(user?.global_role) && (
+    
       <Link
         to="/admin"
         className={`nav-link ${isActive('/admin') ? 'active' : ''}`}
@@ -252,7 +252,6 @@ export default function Navbar() {
           />
         )}
       </Link>
-    )}
 
     <Link to="/editor" className="new-article-btn">
       <span>+</span> New Article

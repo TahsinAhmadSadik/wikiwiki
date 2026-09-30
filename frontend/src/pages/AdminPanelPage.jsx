@@ -30,11 +30,16 @@ export default function AdminPanelPage() {
   const [catStatus, setCatStatus] = useState({ text: '', type: '' });
   const [creatingCat, setCreatingCat] = useState(false);
 
+  // Wiki membership management state
   const [selectedWikiId, setSelectedWikiId] = useState('');
+  const [wikiMembers, setWikiMembers] = useState([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
   const [coAuthorEmail, setCoAuthorEmail] = useState('');
   const [coAuthorMsg, setCoAuthorMsg] = useState({ text: '', type: '' });
 
+  // Site owner global role state
   const [adminEmail, setAdminEmail] = useState('');
+  const [targetGlobalRole, setTargetGlobalRole] = useState('admin');
   const [ownerMsg, setOwnerMsg] = useState({ text: '', type: '' });
 
   const isOwner = user?.global_role === 'owner';
@@ -92,6 +97,28 @@ export default function AdminPanelPage() {
   useEffect(() => {
     fetchAdminData();
   }, [isGlobalAdmin]);
+
+  // Load wiki members whenever selected wiki changes
+  useEffect(() => {
+    if (!selectedWikiId) {
+      setWikiMembers([]);
+      return;
+    }
+
+    const loadMembers = async () => {
+      setLoadingMembers(true);
+      try {
+        const res = await api.get(`/wikis/${selectedWikiId}/members`);
+        setWikiMembers(res.members || []);
+      } catch (err) {
+        console.error('Failed to load wiki members:', err);
+      } finally {
+        setLoadingMembers(false);
+      }
+    };
+
+    loadMembers();
+  }, [selectedWikiId]);
 
   const handleReviewAction = async (versionId, action) => {
     setReviewActionMsg({ text: '', type: '' });
@@ -160,16 +187,34 @@ export default function AdminPanelPage() {
       const res = await api.post(`/wikis/${selectedWikiId}/members`, { email: coAuthorEmail });
       setCoAuthorMsg({ text: res.message, type: 'success' });
       setCoAuthorEmail('');
+      
+      const membersRes = await api.get(`/wikis/${selectedWikiId}/members`);
+      setWikiMembers(membersRes.members || []);
     } catch (err) {
       setCoAuthorMsg({ text: err.data?.message || err.message, type: 'error' });
     }
   };
 
-  const handleAssignGlobalAdmin = async (e) => {
+  const handleRemoveCoAuthor = async (memberUserId, memberName) => {
+    if (!window.confirm(`Are you sure you want to remove ${memberName} as co-author?`)) return;
+    setCoAuthorMsg({ text: '', type: '' });
+    try {
+      const res = await api.delete(`/wikis/${selectedWikiId}/members/${memberUserId}`);
+      setCoAuthorMsg({ text: res.message, type: 'success' });
+      setWikiMembers((prev) => prev.filter((m) => m.user_id !== memberUserId));
+    } catch (err) {
+      setCoAuthorMsg({ text: err.data?.message || err.message, type: 'error' });
+    }
+  };
+
+  const handleAssignGlobalRole = async (e) => {
     e.preventDefault();
     setOwnerMsg({ text: '', type: '' });
     try {
-      const res = await api.patch('/admin/roles', { email: adminEmail, role: 'admin' });
+      const res = await api.patch('/admin/roles', { 
+        email: adminEmail, 
+        role: targetGlobalRole 
+      });
       setOwnerMsg({ text: res.message, type: 'success' });
       setAdminEmail('');
     } catch (err) {
@@ -374,7 +419,7 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* 2. MODERATION REPORTS QUEUE (WITH VERSION ROLLBACK OPTION) */}
+        {/* 2. MODERATION REPORTS QUEUE */}
         <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #ef444430', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h2 style={{ fontSize: '1.25rem', margin: 0 }}>
@@ -415,9 +460,7 @@ export default function AdminPanelPage() {
                       </span>
                     </div>
 
-                    {/* MODERATION ACTION SUITE */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      {/* Demerit Point Selection */}
                       <select
                         value={demeritSelections[rep.report_id] || '0'}
                         onChange={(e) => setDemeritSelections({ ...demeritSelections, [rep.report_id]: e.target.value })}
@@ -430,7 +473,6 @@ export default function AdminPanelPage() {
                         <option value="5">5 Demerits (Instant Ban)</option>
                       </select>
 
-                      {/* Version Rollback Dropdown */}
                       {rep.available_versions?.length > 1 && (
                         <select
                           value={rollbackSelections[rep.report_id] || ''}
@@ -510,13 +552,7 @@ export default function AdminPanelPage() {
 
         {/* 4. TAXONOMY & CATEGORY TREE */}
         {isGlobalAdmin && (
-          <section style={{
-            backgroundColor: '#0d0d0f',
-            border: '1px solid #1f1f23',
-            borderRadius: 8,
-            padding: '1.5rem',
-            marginBottom: '2.5rem'
-          }}>
+          <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', borderRadius: 8, padding: '1.5rem', marginBottom: '2.5rem' }}>
             <h2 style={{ fontSize: '1.25rem', margin: '0 0 0.5rem 0' }}>Taxonomy & Category Tree</h2>
             <p style={{ color: '#a1a1aa', fontSize: '0.85rem', margin: '0 0 1.25rem 0' }}>
               Define global root topics or nest subcategories to organize wiki spaces and articles.
@@ -600,17 +636,17 @@ export default function AdminPanelPage() {
           </section>
         )}
 
-        {/* 5. SITE OWNER CONTROLS */}
+        {/* 5. SITE OWNER CONTROLS (BIDIRECTIONAL GLOBAL ADMIN) */}
         {isOwner && (
           <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #a855f750', padding: '1.5rem', borderRadius: 8, marginBottom: '2.5rem' }}>
             <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0', color: '#a855f7' }}>👑 Site Owner Controls</h2>
             <p style={{ fontSize: '0.85rem', color: '#a1a1aa', margin: '0 0 1rem 0' }}>
-              Assign any registered contributor as a Global Admin by email.
+              Promote a registered user to Global Admin or demote them back to standard Contributor.
             </p>
 
             {ownerMsg.text && <div className={`auth-alert ${ownerMsg.type}`} style={{ marginBottom: '1rem' }}>{ownerMsg.text}</div>}
 
-            <form onSubmit={handleAssignGlobalAdmin} style={{ display: 'flex', gap: '0.75rem' }}>
+            <form onSubmit={handleAssignGlobalRole} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
               <input
                 type="email"
                 required
@@ -618,10 +654,29 @@ export default function AdminPanelPage() {
                 value={adminEmail}
                 onChange={(e) => setAdminEmail(e.target.value)}
                 className="auth-input"
-                style={{ maxWidth: 350 }}
+                style={{ maxWidth: 320 }}
               />
-              <button type="submit" className="auth-btn" style={{ width: 'auto' }}>
-                Promote to Global Admin
+
+              <select
+                value={targetGlobalRole}
+                onChange={(e) => setTargetGlobalRole(e.target.value)}
+                className="auth-input"
+                style={{ width: 'auto', backgroundColor: '#141417' }}
+              >
+                <option value="admin">Promote to Global Admin</option>
+                <option value="contributor">Demote to Contributor</option>
+              </select>
+
+              <button
+                type="submit"
+                className="auth-btn"
+                style={{
+                  width: 'auto',
+                  backgroundColor: targetGlobalRole === 'admin' ? '#a855f7' : '#ef4444',
+                  borderColor: targetGlobalRole === 'admin' ? '#a855f7' : '#ef4444'
+                }}
+              >
+                {targetGlobalRole === 'admin' ? 'Apply Admin Role' : 'Remove Admin Role'}
               </button>
             </form>
           </section>
@@ -706,49 +761,131 @@ export default function AdminPanelPage() {
           )}
         </section>
 
-        {/* 7. ADD CO-AUTHOR */}
+        {/* 7. MANAGE WIKI CO-AUTHORS (BIDIRECTIONAL) */}
         {wikis.length > 0 && (
           <section style={{ backgroundColor: '#0d0d0f', border: '1px solid #1f1f23', padding: '1.5rem', borderRadius: 8 }}>
-            <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0' }}>Add Co-Author to a Wiki</h2>
-            <p style={{ fontSize: '0.85rem', color: '#a1a1aa', margin: '0 0 1rem 0' }}>
-              Grant another contributor administrative control over your wiki space.
+            <h2 style={{ fontSize: '1.2rem', margin: '0 0 0.5rem 0' }}>Manage Wiki Members & Co-Authors</h2>
+            <p style={{ fontSize: '0.85rem', color: '#a1a1aa', margin: '0 0 1.25rem 0' }}>
+              Select a wiki to inspect active contributors, grant co-author privileges, or revoke access.
             </p>
 
-            {coAuthorMsg.text && <div className={`auth-alert ${coAuthorMsg.type}`} style={{ marginBottom: '1rem' }}>{coAuthorMsg.text}</div>}
-
-            <form onSubmit={handleAddCoAuthor} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: 500 }}>
-              <div>
-                <label style={{ fontSize: '0.8rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>Select Wiki</label>
-                <select
-                  required
-                  value={selectedWikiId}
-                  onChange={(e) => setSelectedWikiId(e.target.value)}
-                  className="auth-input"
-                  style={{ backgroundColor: '#050506' }}
-                >
-                  <option value="">-- Select a wiki space --</option>
-                  {wikis.map((w) => (
-                    <option key={w.wiki_id} value={w.wiki_id}>{w.title} ({w.user_role})</option>
-                  ))}
-                </select>
+            {coAuthorMsg.text && (
+              <div className={`auth-alert ${coAuthorMsg.type}`} style={{ marginBottom: '1rem' }}>
+                {coAuthorMsg.text}
               </div>
+            )}
 
-              <div>
-                <label style={{ fontSize: '0.8rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>Contributor Email</label>
-                <input
-                  type="email"
-                  required
-                  placeholder="collaborator@example.com"
-                  value={coAuthorEmail}
-                  onChange={(e) => setCoAuthorEmail(e.target.value)}
-                  className="auth-input"
-                />
+            <div style={{ marginBottom: '1.5rem', maxWidth: 500 }}>
+              <label style={{ fontSize: '0.8rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
+                Select Wiki Space
+              </label>
+              <select
+                value={selectedWikiId}
+                onChange={(e) => setSelectedWikiId(e.target.value)}
+                className="auth-input"
+                style={{ backgroundColor: '#141417' }}
+              >
+                <option value="">-- Choose a wiki space to manage --</option>
+                {wikis.map((w) => (
+                  <option key={w.wiki_id} value={w.wiki_id}>
+                    {w.title} ({w.user_role})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedWikiId && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
+                {/* ACTIVE MEMBERS LIST */}
+                <div style={{ backgroundColor: '#141417', border: '1px solid #27272a', borderRadius: 6, padding: '1rem' }}>
+                  <h3 style={{ fontSize: '0.9rem', margin: '0 0 0.75rem 0', color: '#d4d4d8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Active Members ({wikiMembers.length})
+                  </h3>
+
+                  {loadingMembers ? (
+                    <p style={{ color: '#71717a', fontSize: '0.85rem' }}>Loading members...</p>
+                  ) : wikiMembers.length === 0 ? (
+                    <p style={{ color: '#71717a', fontSize: '0.85rem' }}>No members registered for this wiki.</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {wikiMembers.map((member) => {
+                        const isCoAuthor = member.role === 'co_author';
+                        return (
+                          <div
+                            key={member.user_id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              backgroundColor: '#09090b',
+                              padding: '0.5rem 0.75rem',
+                              borderRadius: 4,
+                              border: '1px solid #1f1f23'
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '0.85rem', fontWeight: 500, color: '#f4f4f5' }}>
+                                {member.username}
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: '#71717a' }}>
+                                {member.email} • <span style={{ color: member.role === 'author' ? '#3b82f6' : '#10b981' }}>{member.role}</span>
+                              </div>
+                            </div>
+
+                            {isCoAuthor && (
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveCoAuthor(member.user_id, member.username)}
+                                style={{
+                                  backgroundColor: 'transparent',
+                                  color: '#ef4444',
+                                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                                  padding: '0.25rem 0.6rem',
+                                  borderRadius: 4,
+                                  fontSize: '0.75rem',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* ADD CO-AUTHOR FORM */}
+                <div style={{ backgroundColor: '#141417', border: '1px solid #27272a', borderRadius: 6, padding: '1rem' }}>
+                  <h3 style={{ fontSize: '0.9rem', margin: '0 0 0.75rem 0', color: '#d4d4d8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Add New Co-Author
+                  </h3>
+                  <form onSubmit={handleAddCoAuthor} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: '#a1a1aa', display: 'block', marginBottom: '0.35rem' }}>
+                        Contributor Email
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="contributor@example.com"
+                        value={coAuthorEmail}
+                        onChange={(e) => setCoAuthorEmail(e.target.value)}
+                        className="auth-input"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      className="auth-btn"
+                      style={{ width: 'auto', alignSelf: 'flex-start', padding: '0.5rem 1rem', fontSize: '0.825rem' }}
+                    >
+                      + Add as Co-Author
+                    </button>
+                  </form>
+                </div>
               </div>
-
-              <button type="submit" className="auth-btn" style={{ width: 'auto', alignSelf: 'flex-start' }}>
-                Add as Co-Author
-              </button>
-            </form>
+            )}
           </section>
         )}
       </main>

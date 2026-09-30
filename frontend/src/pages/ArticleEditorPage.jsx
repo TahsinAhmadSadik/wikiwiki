@@ -520,7 +520,7 @@ export default function ArticleEditorPage() {
           if (res.canPublishDirectly && targetWikiSlug && targetArtSlug) {
             navigate(`/wiki/${targetWikiSlug}/${targetArtSlug}`);
           } else {
-            navigate('/library');
+            navigate('/studio');
           }
         }, 1200);
       } else {
@@ -544,7 +544,7 @@ export default function ArticleEditorPage() {
           } else if (targetWikiSlug) {
             navigate(`/wiki/${targetWikiSlug}`);
           } else {
-            navigate('/library');
+            navigate('/studio');
           }
         }, 1200);
       }
@@ -751,7 +751,7 @@ export default function ArticleEditorPage() {
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <Link
-              to="/library"
+              to="/studio"
               style={{
                 backgroundColor: 'transparent',
                 border: '1px solid #27272a',

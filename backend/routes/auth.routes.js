@@ -16,15 +16,14 @@ const authLimiter = rateLimit({
   message: { success: false, message: 'Too many attempts, please try again later.' }
 });
 
-// Helper: Dispatch Transactional Email via EmailJS HTTPS REST API (Port 443)
-async function sendEmailJSEmail({ toEmail, templateParams, templateIdOverride }) {
+async function sendEmailJSEmail({ toEmail, templateParams, templateIdOverride, emailType = 'Transactional' }) {
   const serviceId = process.env.EMAILJS_SERVICE_ID;
   const templateId = templateIdOverride || process.env.EMAILJS_TEMPLATE_ID;
   const publicKey = process.env.EMAILJS_PUBLIC_KEY;
   const privateKey = process.env.EMAILJS_PRIVATE_KEY;
 
   if (!serviceId || !templateId || !publicKey) {
-    console.warn('[EMAIL WARNING] EmailJS credentials missing in environment.');
+    console.warn(`[EMAIL WARNING] Missing EmailJS credentials or template for ${emailType}.`);
     return;
   }
 
@@ -36,8 +35,8 @@ async function sendEmailJSEmail({ toEmail, templateParams, templateIdOverride })
     body: JSON.stringify({
       service_id: serviceId,
       template_id: templateId,
-      user_id: publicKey,         // EmailJS Public Key
-      accessToken: privateKey,    // EmailJS Private Key
+      user_id: publicKey,
+      accessToken: privateKey,
       template_params: {
         to_email: toEmail,
         ...templateParams
@@ -50,7 +49,7 @@ async function sendEmailJSEmail({ toEmail, templateParams, templateIdOverride })
     throw new Error(`EmailJS API error (${response.status}): ${errorText}`);
   }
 
-  console.log(`[EMAIL DISPATCHED] Verification email successfully sent to ${toEmail}`);
+  console.log(`[EMAIL DISPATCHED] ${emailType} email successfully sent to ${toEmail}`);
 }
 
 // 1. REGISTER
@@ -243,13 +242,18 @@ router.post('/logout', authenticateToken, async (req, res) => {
 });
 
 // 5. FORGOT PASSWORD
+// 5. FORGOT PASSWORD
 router.post('/forgot-password', authLimiter, async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ success: false, message: 'Email address is required' });
 
+    // Include username so it can be passed to the email template
     const users = await prisma.$queryRaw`
-      SELECT user_id, email, is_banned FROM users WHERE email = ${email} LIMIT 1;
+      SELECT user_id, username, email, is_banned 
+      FROM users 
+      WHERE email = ${email} 
+      LIMIT 1;
     `;
 
     if (users.length === 0 || users[0].is_banned) {
@@ -265,7 +269,9 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
     await prisma.$executeRaw`
-      UPDATE password_resets SET used_at = CURRENT_TIMESTAMP WHERE user_id = ${user.user_id} AND used_at IS NULL;
+      UPDATE password_resets 
+      SET used_at = CURRENT_TIMESTAMP 
+      WHERE user_id = ${user.user_id} AND used_at IS NULL;
     `;
 
     await prisma.$executeRaw`
@@ -282,17 +288,27 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
     console.log(`[PASSWORD RESET LINK for ${user.email}]: ${resetUrl}`);
     console.log('----------------------------------------------------');
 
-    // Attempt dispatch if a reset template is provided; otherwise keep console log active
-    try {
-      await sendEmailJSEmail({
-        toEmail: user.email,
-        templateParams: {
-          verification_url: resetUrl
-        },
-        templateIdOverride: process.env.EMAILJS_RESET_TEMPLATE_ID || process.env.EMAILJS_TEMPLATE_ID
-      });
-    } catch (mailErr) {
-      console.error('[PASSWORD RESET EMAIL FAILED]:', mailErr.message);
+    // Strictly enforce EMAILJS_RESET_TEMPLATE_ID to prevent sending the verification template
+    const resetTemplateId = process.env.EMAILJS_RESET_TEMPLATE_ID;
+
+    if (!resetTemplateId) {
+      console.warn('[EMAIL WARNING] EMAILJS_RESET_TEMPLATE_ID is not configured in environment.');
+    } else {
+      try {
+        await sendEmailJSEmail({
+          toEmail: user.email,
+          emailType: 'Password reset',
+          templateIdOverride: resetTemplateId,
+          templateParams: {
+            username: user.username,
+            reset_url: resetUrl,
+            // Fallback key if the EmailJS template uses {{verification_url}}
+            verification_url: resetUrl
+          }
+        });
+      } catch (mailErr) {
+        console.error('[PASSWORD RESET EMAIL FAILED]:', mailErr.message);
+      }
     }
 
     res.status(200).json({
